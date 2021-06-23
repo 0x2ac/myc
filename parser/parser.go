@@ -175,6 +175,12 @@ func parsePrimary() ast.Expression {
 		return &ast.VariableExpression{
 			Identifier: peek(-1),
 		}
+	} else if peek(0).Type == lexer.MINUS {
+		current++
+		return &ast.UnaryExpression{
+			Operator: peek(-1),
+			Value:    parsePrimary(),
+		}
 	}
 
 	parseError(peek(0), "Expected literal value.")
