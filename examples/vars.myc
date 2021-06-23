@@ -1,0 +1,6 @@
+var a = 45
+{
+    var b = 32
+    print a, b
+    print a + b
+}
