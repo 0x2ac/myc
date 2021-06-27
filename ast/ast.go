@@ -1,17 +1,28 @@
 package ast
 
-import "github.com/kartiknair/myc/lexer"
+import (
+	"fmt"
+
+	"github.com/kartiknair/myc/lexer"
+)
 
 type Type interface {
 	isType()
 	Equals(Type) bool
+	String() string
 }
 
 type Primitive struct {
 	Name string
 }
 
-func (*Primitive) isType() {}
+type FunctionType struct {
+	Parameters []Type
+	ReturnType Type
+}
+
+func (*Primitive) isType()    {}
+func (*FunctionType) isType() {}
 
 func (self *Primitive) Equals(t Type) bool {
 	if primitiveT, ok := t.(*Primitive); ok {
@@ -21,8 +32,54 @@ func (self *Primitive) Equals(t Type) bool {
 	return false
 }
 
+func (self *Primitive) String() string {
+	return self.Name
+}
+
+func (self *FunctionType) Equals(t Type) bool {
+	if funcType, ok := t.(*FunctionType); ok {
+		if len(self.Parameters) != len(funcType.Parameters) {
+			return false
+		}
+
+		allParamsSame := true
+		for i, param := range self.Parameters {
+			if !param.Equals(funcType.Parameters[i]) {
+				allParamsSame = false
+			}
+		}
+
+		return allParamsSame && self.ReturnType.Equals(funcType.ReturnType)
+	}
+
+	return false
+}
+
+func (self *FunctionType) String() string {
+	params := ""
+	for i, param := range self.Parameters {
+		params += param.String()
+		if i != len(self.Parameters)-1 {
+			params += ", "
+		}
+	}
+	return fmt.Sprintf("(fn (%s))", params)
+}
+
 type Statement interface {
 	isStatement()
+}
+
+type Parameter struct {
+	Identifier lexer.Token
+	Type       Type
+}
+
+type FunctionDeclaration struct {
+	Identifier lexer.Token
+	Parameters []Parameter
+	ReturnType Type
+	Block      BlockStatement
 }
 
 type VariableDeclaration struct {
@@ -40,6 +97,12 @@ type PrintStatement struct {
 	Expressions []Expression
 }
 
+type ReturnStatement struct {
+	Expression Expression
+
+	ReturnToken lexer.Token
+}
+
 type ExpressionStatement struct {
 	Expression Expression
 }
@@ -48,9 +111,11 @@ type BlockStatement struct {
 	Statements []Statement
 }
 
+func (*FunctionDeclaration) isStatement() {}
 func (*VariableDeclaration) isStatement() {}
 func (*ConstantDeclaration) isStatement() {}
 func (*PrintStatement) isStatement()      {}
+func (*ReturnStatement) isStatement()     {}
 func (*ExpressionStatement) isStatement() {}
 func (*BlockStatement) isStatement()      {}
 
@@ -80,6 +145,14 @@ type VariableExpression struct {
 	Typ Type
 }
 
+type CallExpression struct {
+	Callee    Expression
+	Arguments []Expression
+
+	Typ            Type
+	LeftParenToken lexer.Token
+}
+
 type Literal struct {
 	LiteralType  lexer.TokenType
 	LiteralValue string
@@ -90,6 +163,7 @@ type Literal struct {
 func (*UnaryExpression) isExpression()    {}
 func (*BinaryExpression) isExpression()   {}
 func (*VariableExpression) isExpression() {}
+func (*CallExpression) isExpression()     {}
 func (*Literal) isExpression()            {}
 
 func (self *UnaryExpression) Type() Type {
@@ -99,6 +173,9 @@ func (self *BinaryExpression) Type() Type {
 	return self.Typ
 }
 func (self *VariableExpression) Type() Type {
+	return self.Typ
+}
+func (self *CallExpression) Type() Type {
 	return self.Typ
 }
 func (self *Literal) Type() Type {

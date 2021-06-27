@@ -9,9 +9,7 @@ import (
 func genType(t ast.Type) string {
 	switch t.(type) {
 	case *ast.Primitive:
-		{
-			return genPrimitive(t.(*ast.Primitive))
-		}
+		return genPrimitive(t.(*ast.Primitive))
 	}
 
 	panic("Type node has invalid static type.")
@@ -24,29 +22,42 @@ func genPrimitive(primitive *ast.Primitive) string {
 
 func genStatement(stmt ast.Statement) string {
 	switch stmt.(type) {
+	case *ast.FunctionDeclaration:
+		return genFunctionDeclaration(stmt.(*ast.FunctionDeclaration))
 	case *ast.VariableDeclaration:
-		{
-			return genVariableDeclaration(stmt.(*ast.VariableDeclaration))
-		}
+		return genVariableDeclaration(stmt.(*ast.VariableDeclaration))
 	case *ast.ConstantDeclaration:
-		{
-			return genConstantDeclaration(stmt.(*ast.ConstantDeclaration))
-		}
+		return genConstantDeclaration(stmt.(*ast.ConstantDeclaration))
 	case *ast.PrintStatement:
-		{
-			return genPrintStatement(stmt.(*ast.PrintStatement))
-		}
+		return genPrintStatement(stmt.(*ast.PrintStatement))
+	case *ast.ReturnStatement:
+		return genReturnStatement(stmt.(*ast.ReturnStatement))
 	case *ast.ExpressionStatement:
-		{
-			return genExpressionStatement(stmt.(*ast.ExpressionStatement))
-		}
+		return genExpressionStatement(stmt.(*ast.ExpressionStatement))
 	case *ast.BlockStatement:
-		{
-			return genBlockStatement(stmt.(*ast.BlockStatement))
-		}
+		return genBlockStatement(stmt.(*ast.BlockStatement))
 	}
 
 	panic("Statement node has invalid static type.")
+}
+
+func genFunctionDeclaration(decl *ast.FunctionDeclaration) string {
+	gennedParameters := ""
+
+	for i, param := range decl.Parameters {
+		gennedParameters += param.Type.String() + " " + param.Identifier.Lexeme
+		if i != len(decl.Parameters)-1 {
+			gennedParameters += ", "
+		}
+	}
+
+	return fmt.Sprintf(
+		"%s %s(%s) %s",
+		decl.ReturnType.String(),
+		decl.Identifier.Lexeme,
+		gennedParameters,
+		genBlockStatement(&decl.Block),
+	)
 }
 
 func genVariableDeclaration(decl *ast.VariableDeclaration) string {
@@ -71,13 +82,9 @@ func getFormatStringForType(t ast.Type) string {
 	if primitive, ok := t.(*ast.Primitive); ok {
 		switch primitive.Name {
 		case "int":
-			{
-				return "%d"
-			}
+			return "%d"
 		case "float":
-			{
-				return "%f"
-			}
+			return "%f"
 		}
 	}
 
@@ -99,6 +106,10 @@ func genPrintStatement(printStmt *ast.PrintStatement) string {
 	return fmt.Sprintf("printf(\"%s\", %s);", formatString, arguments)
 }
 
+func genReturnStatement(returnStmt *ast.ReturnStatement) string {
+	return fmt.Sprintf("return %s;", genExpression(returnStmt.Expression))
+}
+
 func genExpressionStatement(exprStmt *ast.ExpressionStatement) string {
 	return fmt.Sprintf("%s;", genExpression(exprStmt.Expression))
 }
@@ -114,21 +125,15 @@ func genBlockStatement(blockStmt *ast.BlockStatement) string {
 func genExpression(expr ast.Expression) string {
 	switch expr.(type) {
 	case *ast.UnaryExpression:
-		{
-			return genUnaryExpression(expr.(*ast.UnaryExpression))
-		}
+		return genUnaryExpression(expr.(*ast.UnaryExpression))
 	case *ast.BinaryExpression:
-		{
-			return genBinaryExpression(expr.(*ast.BinaryExpression))
-		}
+		return genBinaryExpression(expr.(*ast.BinaryExpression))
+	case *ast.CallExpression:
+		return genCallExpression(expr.(*ast.CallExpression))
 	case *ast.VariableExpression:
-		{
-			return genVariableExpression(expr.(*ast.VariableExpression))
-		}
+		return genVariableExpression(expr.(*ast.VariableExpression))
 	case *ast.Literal:
-		{
-			return genLiteral(expr.(*ast.Literal))
-		}
+		return genLiteral(expr.(*ast.Literal))
 	}
 
 	panic("Expression node has invalid static type.")
@@ -144,6 +149,23 @@ func genBinaryExpression(binaryExpr *ast.BinaryExpression) string {
 		genExpression(binaryExpr.Left),
 		binaryExpr.Operator.Lexeme,
 		genExpression(binaryExpr.Right),
+	)
+}
+
+func genCallExpression(callExpr *ast.CallExpression) string {
+	gennedArguments := ""
+
+	for i, arg := range callExpr.Arguments {
+		gennedArguments += genExpression(arg)
+		if i != len(callExpr.Arguments)-1 {
+			gennedArguments += ", "
+		}
+	}
+
+	return fmt.Sprintf(
+		"%s(%s)",
+		genExpression(callExpr.Callee),
+		gennedArguments,
 	)
 }
 

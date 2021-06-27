@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"errors"
+	"fmt"
 	"log"
 
 	"github.com/kartiknair/myc/ast"
@@ -74,7 +75,7 @@ func analyzeExpression(expr ast.Expression) {
 			e := expr.(*ast.UnaryExpression)
 			analyzeExpression(e.Value)
 			if _, ok := e.Value.Type().(*ast.Primitive); !ok {
-				// ^ translation: if value's type is not a primitive
+				// The value is not a primitive.
 				analysisError(e.Operator, "Unary operator can only be on primitive types.")
 			}
 
@@ -95,6 +96,53 @@ func analyzeExpression(expr ast.Expression) {
 			}
 
 			e.Typ = e.Left.Type()
+		}
+	case *ast.CallExpression:
+		{
+			e := expr.(*ast.CallExpression)
+			analyzeExpression(e.Callee)
+
+			if _, ok := e.Callee.Type().(*ast.FunctionType); !ok {
+				// The callee is not a function.
+				analysisError(
+					e.LeftParenToken,
+					fmt.Sprintf(
+						"Attempting to call value of non-functional type: `%s`",
+						e.Callee.Type().String(),
+					),
+				)
+			}
+
+			signature := e.Callee.Type().(*ast.FunctionType)
+
+			if len(e.Arguments) != len(signature.Parameters) {
+				analysisError(
+					e.LeftParenToken,
+					fmt.Sprintf(
+						"Function being called requires %d parameters. Received %d arguments instead.",
+						len(signature.Parameters),
+						len(e.Arguments),
+					),
+				)
+			}
+
+			for i, param := range signature.Parameters {
+				analyzeExpression(e.Arguments[i])
+
+				if !param.Equals(e.Arguments[i].Type()) {
+					analysisError(
+						e.LeftParenToken,
+						fmt.Sprintf(
+							"Mismatched type for positional argument %d. Expected value of type: `%s`, instead got value of type: `%s`.",
+							i+1,
+							param.String(),
+							e.Arguments[i].Type().String(),
+						),
+					)
+				}
+			}
+
+			e.Typ = signature.ReturnType
 		}
 	case *ast.VariableExpression:
 		{
@@ -122,8 +170,60 @@ func analyzeExpression(expr ast.Expression) {
 	}
 }
 
+// Global used to track what expressions are valid return values.
+var functionScope *ast.FunctionDeclaration
+
+// Tracks whether the current function has a valid return statement.
+var hasValidReturn bool
+
 func analyzeStatement(statement ast.Statement) {
 	switch statement.(type) {
+	case *ast.FunctionDeclaration:
+		{
+			oldFunctionScope := functionScope
+
+			s := statement.(*ast.FunctionDeclaration)
+			functionScope = s
+
+			onlyTypeParams := []ast.Type{}
+			for _, p := range s.Parameters {
+				onlyTypeParams = append(onlyTypeParams, p.Type)
+			}
+
+			signature := ast.FunctionType{
+				Parameters: onlyTypeParams,
+				ReturnType: s.ReturnType,
+			}
+
+			err := namespace.declare(s.Identifier.Lexeme, &signature)
+			if err != nil {
+				analysisError(s.Identifier, err.Error())
+			}
+
+			oldScope := namespace // copy the old scope
+			namespace = NewSymbolTableFromEnclosing(namespace)
+
+			for _, param := range s.Parameters {
+				namespace.declare(param.Identifier.Lexeme, param.Type)
+			}
+
+			for _, statement := range s.Block.Statements {
+				analyzeStatement(statement)
+			}
+
+			namespace = oldScope
+			functionScope = oldFunctionScope
+
+			if !hasValidReturn && s.ReturnType != nil {
+				analysisError(
+					s.Identifier,
+					fmt.Sprintf(
+						"Function does not have a return statement. Expected return of type: `%s`.",
+						s.ReturnType,
+					),
+				)
+			}
+		}
 	case *ast.VariableDeclaration:
 		{
 			s := statement.(*ast.VariableDeclaration)
@@ -167,6 +267,41 @@ func analyzeStatement(statement ast.Statement) {
 			for _, expr := range s.Expressions {
 				analyzeExpression(expr)
 			}
+		}
+	case *ast.ReturnStatement:
+		{
+			s := statement.(*ast.ReturnStatement)
+
+			if s.Expression != nil {
+				analyzeExpression(s.Expression)
+			}
+
+			if functionScope == nil {
+				analysisError(s.ReturnToken, "Return statement not inside a function.")
+			} else if s.Expression == nil && functionScope.ReturnType != nil {
+				analysisError(
+					s.ReturnToken,
+					fmt.Sprintf(
+						"Missing expression in return statement. Function has return type: `%s`.",
+						functionScope.ReturnType.String(),
+					),
+				)
+			} else if s.Expression != nil && functionScope.ReturnType == nil {
+				analysisError(s.ReturnToken, "Returning value in void function.")
+			} else if s.Expression != nil {
+				if !s.Expression.Type().Equals(functionScope.ReturnType) {
+					analysisError(
+						s.ReturnToken,
+						fmt.Sprintf(
+							"Mismatched return type. Expected type: `%s` instead got: `%s`.",
+							functionScope.ReturnType.String(),
+							s.Expression.Type().String(),
+						),
+					)
+				}
+			}
+
+			hasValidReturn = true
 		}
 	case *ast.ExpressionStatement:
 		{

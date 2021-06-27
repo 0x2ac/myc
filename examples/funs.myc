@@ -1,0 +1,7 @@
+fun sum(a int, b int) int {
+    return a + b
+}
+
+var total = sum(23, 45)
+
+print total

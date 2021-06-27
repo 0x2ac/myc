@@ -10,6 +10,8 @@ var Keywords = [...]string{
 	"var",
 	"const",
 	"print",
+	"fun",
+	"return",
 }
 
 type Pos struct {
@@ -30,6 +32,8 @@ const (
 	VAR
 	CONST
 	PRINT
+	FUN
+	RETURN
 	keyword_end
 
 	LEFT_PAREN
@@ -228,19 +232,9 @@ func ScanToken() {
 		addToken(SEMICOLON, ";")
 	case '\n':
 		{
-			/*
-				The rule is this. If the last token before a newline is an identifier
-				(which includes words like int and float64), a basic literal such as a
-				number or string constant, or one of the tokens:
-
-				['break', 'continue', 'fallthrough', 'return', '++', '--', ')', '}']
-
-				the lexer always inserts a semicolon after the token. This could be
-				summarized as, “if the newline comes after a token that could end a
-				statement, insert a semicolon”.
-
-				Source: https://golang.org/doc/effective_go#semicolons
-			*/
+			// “if the newline comes after a token that could end a
+			// statement, insert a semicolon”.
+			// Source: https://golang.org/doc/effective_go#semicolons
 
 			if len(tokens) > 0 {
 				currentTokensType := tokens[len(tokens)-1].Type
@@ -249,6 +243,7 @@ func ScanToken() {
 					(currentTokensType == IDENTIFIER ||
 						currentTokensType == RIGHT_PAREN ||
 						currentTokensType == RIGHT_BRACE ||
+						currentTokensType == RETURN ||
 						currentTokensType == INT ||
 						currentTokensType == FLOAT ||
 						currentTokensType == STRING) {
