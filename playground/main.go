@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/kartiknair/myc/analyzer"
-	cgen "github.com/kartiknair/myc/gen/c"
+	"github.com/kartiknair/myc/gen"
 	"github.com/kartiknair/myc/lexer"
 	"github.com/kartiknair/myc/parser"
 )
@@ -22,6 +22,8 @@ print total + 1
 	tokens := lexer.Lex(code)
 	parsed := parser.Parse(tokens)
 	analyzer.Analyze(parsed)
-	genned := cgen.Gen(parsed)
-	fmt.Println(genned)
+	gennedC := gen.C(parsed)
+	fmt.Println(gennedC)
+	gennedLLVM := gen.LLVM(parsed)
+	fmt.Println(gennedLLVM)
 }
