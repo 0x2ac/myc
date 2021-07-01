@@ -2,10 +2,12 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
+	"time"
 
 	"github.com/kartiknair/myc/analyzer"
 	llvmgen "github.com/kartiknair/myc/gen/llvm"
@@ -16,16 +18,32 @@ import (
 
 var CLANG_EXECUTABLE_PATH = "clang"
 
+const SHOW_TIME_INFO = true
+
 func genIRFromFile(filename string) string {
 	code, err := ioutil.ReadFile(filename)
 	if err != nil {
 		log.Fatalf("Failed while attempting to read source file.\n%s", err.Error())
 	}
 
+	start := time.Now()
+
 	tokens := lexer.Lex(string(code))
 	parsed := parser.Parse(tokens)
 	analyzer.Analyze(parsed)
+
+	lpaTime := time.Now()
+
+	if SHOW_TIME_INFO {
+		fmt.Printf("%dus for lexing and parsing and analysis\n", lpaTime.Sub(start).Microseconds())
+	}
+
 	ir := llvmgen.Gen(parsed)
+
+	if SHOW_TIME_INFO {
+		irGenTime := time.Now()
+		fmt.Printf("%dus to generate LLVM IR\n", irGenTime.Sub(lpaTime).Microseconds())
+	}
 
 	return ir
 }
@@ -45,10 +63,6 @@ func run(filename string) {
 	numberOfIRBytes, err := irFile.Write([]byte(ir))
 	if err != nil {
 		log.Fatalf("Failed while writing to temp IR file. Wrote %d bytes.\n%s", numberOfIRBytes, err.Error())
-	}
-	numberOfExeBytes, err := executableFile.Write([]byte(ir))
-	if err != nil {
-		log.Fatalf("Failed while writing to temp executable file. Wrote %d bytes.\n%s", numberOfExeBytes, err.Error())
 	}
 
 	irFile.Close()
@@ -79,6 +93,8 @@ func run(filename string) {
 func build(filename string, executableName string) {
 	ir := genIRFromFile(filename)
 
+	start := time.Now()
+
 	irFile, err := ioutil.TempFile("", "myc-ir--*.ll")
 	if err != nil {
 		log.Fatalf("Failed while opening temp file for IR.\n%s", err.Error())
@@ -88,6 +104,11 @@ func build(filename string, executableName string) {
 		log.Fatalf("Failed while writing to temp IR file. Wrote %d bytes.\n%s", numberOfIRBytes, err.Error())
 	}
 	irFile.Close()
+
+	irWriteTime := time.Now()
+	if SHOW_TIME_INFO {
+		fmt.Printf("%dus to write IR to file\n", irWriteTime.Sub(start).Microseconds())
+	}
 
 	compileCommand := exec.Command(
 		CLANG_EXECUTABLE_PATH,
@@ -100,6 +121,10 @@ func build(filename string, executableName string) {
 	err = compileCommand.Run()
 	if err != nil {
 		log.Fatal(err.Error())
+	}
+
+	if SHOW_TIME_INFO {
+		fmt.Printf("%dms for clang to compile IR to executable\n", time.Since(irWriteTime).Milliseconds())
 	}
 }
 
