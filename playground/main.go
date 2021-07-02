@@ -1,29 +1,34 @@
 package main
 
 import (
-	"fmt"
-
 	"github.com/kartiknair/myc/analyzer"
-	"github.com/kartiknair/myc/gen"
 	"github.com/kartiknair/myc/lexer"
 	"github.com/kartiknair/myc/parser"
 )
 
 func main() {
 	code := `
-fun sum(a int, b int) int {
-	return a + b
+struct Point {
+	x int
+	y int
 }
 
-var total = sum(23, 45)
+var p1 = Point{1, 4}
+var p2 = Point{x: 3, y: 4}
+var p3 = Point{
+	x: 56,
+	y: 78,
+}
 
-print total + 1
+print p1
+print p2.x + p3.x
+print p2.y + p3.y
 `
 	tokens := lexer.Lex(code)
 	parsed := parser.Parse(tokens)
 	analyzer.Analyze(parsed)
-	gennedC := gen.C(parsed)
-	fmt.Println(gennedC)
-	gennedLLVM := gen.LLVM(parsed)
-	fmt.Println(gennedLLVM)
+	// gennedC := gen.C(parsed)
+	// fmt.Println(gennedC)
+	// gennedLLVM := gen.LLVM(parsed)
+	// fmt.Println(gennedLLVM)
 }

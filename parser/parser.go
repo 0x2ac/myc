@@ -3,7 +3,6 @@ package parser
 import (
 	"log"
 
-	"github.com/alecthomas/repr"
 	"github.com/kartiknair/myc/ast"
 	"github.com/kartiknair/myc/lexer"
 )
@@ -322,7 +321,6 @@ func parseComposite() *ast.CompositeLiteral {
 		if peek(0).Type == lexer.RIGHT_BRACE {
 			break
 		} else if usingNamedInitializers {
-			repr.Println(peek(0))
 			name := expect(lexer.IDENTIFIER, "Expect identifier for initializer in composite literal.")
 			expect(lexer.COLON, "Expect `:` in composite literal initializer.")
 			expr := parseExpression()

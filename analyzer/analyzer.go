@@ -55,6 +55,7 @@ func (s *SymbolTable) declare(name string, initialType ast.Type) error {
 }
 
 var namespace = NewSymbolTable()
+var typespace = NewSymbolTable()
 
 // Modifies the `statements` argument to add and check type information.
 // Panics with a useful error message if program has semantic errors.
@@ -153,6 +154,138 @@ func analyzeExpression(expr ast.Expression) {
 			}
 			e.Typ = valueType
 		}
+	case *ast.GetExpression:
+		{
+			e := expr.(*ast.GetExpression)
+
+			analyzeExpression(e.Expression)
+
+			structType, ok := e.Expression.Type().(*ast.StructType)
+
+			// e.g. 32.value, "hello".foo, etc.
+			if !ok {
+				analysisError(
+					e.Identifier,
+					fmt.Sprintf(
+						"Expected structure type, instead got type: '%s'.",
+						e.Expression.Type().String(),
+					),
+				)
+			}
+
+			foundMember, ok := structType.GetMember(e.Identifier.Lexeme)
+			if !ok {
+				analysisError(
+					e.Identifier,
+					fmt.Sprintf(
+						"Type: '%s' does not have field: '%s'.",
+						structType.Name,
+						e.Identifier.Lexeme,
+					),
+				)
+			}
+
+			e.Typ = foundMember.Type
+		}
+	case *ast.CompositeLiteral:
+		{
+			e := expr.(*ast.CompositeLiteral)
+
+			r, err := typespace.get(e.Typ.(*ast.StructType).Name)
+
+			if err != nil {
+				analysisError(
+					e.LeftBraceToken,
+					fmt.Sprintf(
+						"Named type: '%s' could not be resolved.",
+						e.Typ.(*ast.StructType).Name,
+					),
+				)
+			}
+
+			resolvedStructType := r.(*ast.StructType)
+			e.Typ = resolvedStructType
+
+			if e.NamedInitializers == nil && e.UnnamedInitializers == nil {
+				analysisError(
+					e.LeftBraceToken,
+					"Missing intializers for members in composite literal.",
+				)
+			} else if e.NamedInitializers != nil {
+				if len(*e.NamedInitializers) != len(resolvedStructType.Members) {
+					analysisError(
+						e.LeftBraceToken,
+						fmt.Sprintf(
+							"Number of named intitializers does not match. Expected: %d for type '%s', instead got: %d.",
+							len(resolvedStructType.Members),
+							resolvedStructType.Name,
+							len(*e.NamedInitializers),
+						),
+					)
+				}
+
+				for _, initializer := range *e.NamedInitializers {
+					analyzeExpression(initializer.Value)
+
+					resolvedMember, ok := resolvedStructType.GetMember(initializer.Identifier.Lexeme)
+
+					// Check if the resolved type has a field with that name
+					if !ok {
+						analysisError(
+							initializer.Identifier,
+							fmt.Sprintf(
+								"Type: '%s' does not have a field with name: '%s'.",
+								resolvedStructType.Name,
+								initializer.Identifier.Lexeme,
+							),
+						)
+					}
+
+					// Check if the expression has the appropriate type for the member
+					if !initializer.Value.Type().Equals(resolvedMember.Type) {
+						analysisError(
+							initializer.Identifier,
+							fmt.Sprintf(
+								"`%s.%s` has type: '%s', got expression of type: '%s'.",
+								resolvedStructType.Name,
+								initializer.Identifier.Lexeme,
+								resolvedMember.Type.String(),
+								initializer.Value.Type().String(),
+							),
+						)
+					}
+				}
+			} else if e.UnnamedInitializers != nil {
+				if len(*e.UnnamedInitializers) != len(resolvedStructType.Members) {
+					analysisError(
+						e.LeftBraceToken,
+						fmt.Sprintf(
+							"Number of anonymous intitializers does not match. Expected: %d for type '%s', instead got: %d.",
+							len(resolvedStructType.Members),
+							resolvedStructType.Name,
+							len(*e.NamedInitializers),
+						),
+					)
+				}
+
+				for i, intializer := range *e.UnnamedInitializers {
+					analyzeExpression(intializer)
+
+					if !resolvedStructType.Members[i].Type.Equals(intializer.Type()) {
+						analysisError(
+							e.LeftBraceToken,
+							fmt.Sprintf(
+								"Positional initializer has incorrect type. Expected value of type: '%s' instead got value of type: '%s'.",
+								resolvedStructType.Members[i].Type.String(),
+								intializer.Type().String(),
+							),
+						)
+					}
+				}
+			}
+
+			e.Typ = resolvedStructType
+		}
 	case *ast.Literal:
 		{
 			e := expr.(*ast.Literal)
@@ -222,6 +355,20 @@ func analyzeStatement(statement ast.Statement) {
 						s.ReturnType,
 					),
 				)
+			}
+		}
+	case *ast.StructDeclaration:
+		{
+			s := statement.(*ast.StructDeclaration)
+			err := typespace.declare(
+				s.Identifier.Lexeme,
+				&ast.StructType{
+					Name:    s.Identifier.Lexeme,
+					Members: s.Members,
+				},
+			)
+			if err != nil {
+				analysisError(s.Identifier, fmt.Sprintf("Type name '%s' is already in use.", s.Identifier.Lexeme))
 			}
 		}
 	case *ast.VariableDeclaration:

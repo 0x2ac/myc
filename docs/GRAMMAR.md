@@ -7,11 +7,15 @@ Program = Declaration+
 
 Declaration =
 	FunctionDeclaration
+	StructDeclaration
 	VariableDeclaration
 	ConstantDeclaration
 
 FunctionDeclaration = 'fun' identifier ParameterList (Type)? Block
 ParameterList = ['(' ((identifier Type) (',' identifier Type)*)? ')' ]
+
+StructDeclaration = 'struct' identifier '{ StructDefinition+ '}'
+StructMember = identifier Type ';'
 
 VariableDeclaration = 'var' identifier (Type)? ('=' Expression)? ';'
 ConstantDeclaration = 'const' identifier '=' Expression ';'
@@ -28,7 +32,9 @@ Block = ['{' Statement+ '}']
 
 Expression =
 	identifier : VariableExpression
-	Literal : Literal
+	GetExpression
+	CompositeLiteral
+	Literal
 
   .operators prefix
 	'-' : Negate
@@ -45,6 +51,18 @@ Expression =
 
   .operators postfix
 	['(' (Expression (',' Expression)*)? ')'] : CallExpression
+
+GetExpression =
+	Expression '.' identifier
+
+CompositeLiteral =
+	Type '{' NamedInitializers | UnnamedInitializers '}'
+
+NamedInitializers =
+	(Identifier ':' Expression (',' Identifier ':' Expression)*)?
+
+UnnamedInitializers =
+	(Expression (',' Expression)*)?
 
 Literal =
 	integer : Integer

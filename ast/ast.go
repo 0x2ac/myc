@@ -1,7 +1,6 @@
 package ast
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/kartiknair/myc/lexer"
@@ -84,21 +83,25 @@ func (s *StructType) Equals(t Type) bool {
 func (s *StructType) String() string {
 	membersString := ""
 
-	for _, m := range s.Members {
+	for i, m := range s.Members {
 		membersString += m.Identifier.Lexeme + " " + m.Type.String()
+
+		if i != len(s.Members)-1 {
+			membersString += ", "
+		}
 	}
 
 	return fmt.Sprintf("%s{%s}", s.Name, membersString)
 }
 
-func (s *StructType) GetMember(name string) (*StructMember, error) {
+func (s *StructType) GetMember(name string) (*StructMember, bool) {
 	for _, m := range s.Members {
 		if m.Identifier.Lexeme == name {
-			return &m, nil
+			return &m, true
 		}
 	}
 
-	return nil, errors.New("Could not find member.")
+	return nil, false
 }
 
 type Statement interface {
