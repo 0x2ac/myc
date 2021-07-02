@@ -12,6 +12,7 @@ var Keywords = [...]string{
 	"print",
 	"fun",
 	"return",
+	"struct",
 }
 
 type Pos struct {
@@ -34,6 +35,7 @@ const (
 	PRINT
 	FUN
 	RETURN
+	STRUCT
 	keyword_end
 
 	LEFT_PAREN
@@ -42,6 +44,7 @@ const (
 	RIGHT_BRACE
 	COMMA
 	DOT
+	COLON
 
 	binaryop_begin
 	EQUAL
@@ -203,6 +206,8 @@ func ScanToken() {
 		addToken(COMMA, "")
 	case '.':
 		addToken(DOT, "")
+	case ':':
+		addToken(COLON, "")
 	case '-':
 		addToken(MINUS, "")
 	case '+':

@@ -3,6 +3,7 @@ package parser
 import (
 	"log"
 
+	"github.com/alecthomas/repr"
 	"github.com/kartiknair/myc/ast"
 	"github.com/kartiknair/myc/lexer"
 )
@@ -11,6 +12,25 @@ var (
 	current int
 	tokens  []lexer.Token
 )
+
+var primitives = [...]string{
+	"int",
+	"float",
+}
+
+func isIdentifierPrimitive(ident lexer.Token) bool {
+	if ident.Type != lexer.IDENTIFIER {
+		panic("Invalid token passed to `isIdentifierPrimitive`.")
+	}
+
+	for _, p := range primitives {
+		if ident.Lexeme == p {
+			return true
+		}
+	}
+
+	return false
+}
 
 func parseError(token lexer.Token, message string) {
 	log.Fatalf(
@@ -75,6 +95,37 @@ func parseStatement() ast.Statement {
 			Parameters: parameters,
 			ReturnType: returnType,
 			Block:      *block,
+		}
+	} else if t.Type == lexer.STRUCT {
+		// StructDeclaration
+		current++
+		name := expect(lexer.IDENTIFIER, "Expect struct name.")
+		expect(lexer.LEFT_BRACE, "Expect `{` after name in struct declaration.")
+
+		if peek(0).Type == lexer.RIGHT_BRACE {
+			parseError(peek(0), "Illegal to declare empty struct.")
+		}
+
+		members := []ast.StructMember{}
+		for peek(0).Type != lexer.RIGHT_BRACE {
+			memberName := expect(lexer.IDENTIFIER, "Expect")
+			memberType := parseType()
+			expect(lexer.SEMICOLON, "Expect semicolon after member declaration in struct.")
+			members = append(members, ast.StructMember{
+				Identifier: memberName,
+				Type:       memberType,
+			})
+		}
+
+		current++ // skip the `}`
+
+		if peek(0).Type == lexer.SEMICOLON {
+			current++ // optional trailing semicolon
+		}
+
+		return &ast.StructDeclaration{
+			Identifier: name,
+			Members:    members,
 		}
 	} else if t.Type == lexer.VAR {
 		// VariableDeclaration
@@ -220,6 +271,94 @@ func parsePrecedenceExpression(lhs ast.Expression, minPrecedence int) ast.Expres
 	return lhs
 }
 
+func parseComposite() *ast.CompositeLiteral {
+	typ := parseType()
+	leftBraceToken := expect(lexer.LEFT_BRACE, "Expect `{` after type in composite literal.")
+
+	if peek(0).Type == lexer.RIGHT_BRACE {
+		return &ast.CompositeLiteral{
+			Typ:                 typ,
+			NamedInitializers:   nil,
+			UnnamedInitializers: nil,
+			LeftBraceToken:      leftBraceToken,
+		}
+	}
+
+	var (
+		namedInitializers      []ast.NamedInitializer
+		unnamedInitializers    []ast.Expression
+		usingNamedInitializers = false
+	)
+
+	if peek(0).Type == lexer.IDENTIFIER {
+		current++
+		if peek(0).Type == lexer.COLON {
+			usingNamedInitializers = true
+
+			name := peek(-1)
+			current++ // skip the ':'
+			expr := parseExpression()
+
+			namedInitializers = append(namedInitializers, ast.NamedInitializer{
+				Identifier: name,
+				Value:      expr,
+			})
+		} else {
+			usingNamedInitializers = false
+			unnamedInitializers = append(
+				unnamedInitializers,
+				&ast.VariableExpression{Identifier: peek(-1)},
+			)
+		}
+	} else {
+		usingNamedInitializers = false
+		expr := parseExpression()
+		unnamedInitializers = append(unnamedInitializers, expr)
+	}
+
+	for peek(0).Type == lexer.COMMA {
+		current++
+
+		if peek(0).Type == lexer.RIGHT_BRACE {
+			break
+		} else if usingNamedInitializers {
+			repr.Println(peek(0))
+			name := expect(lexer.IDENTIFIER, "Expect identifier for initializer in composite literal.")
+			expect(lexer.COLON, "Expect `:` in composite literal initializer.")
+			expr := parseExpression()
+			namedInitializers = append(namedInitializers, ast.NamedInitializer{
+				Identifier: name,
+				Value:      expr,
+			})
+		} else {
+			expr := parseExpression()
+			unnamedInitializers = append(unnamedInitializers, expr)
+		}
+	}
+
+	if peek(0).Type == lexer.COMMA {
+		current++ // optional trailing comma is skipped
+	}
+
+	expect(lexer.RIGHT_BRACE, "Expect `}` after initializers in compositer literal.")
+
+	if usingNamedInitializers {
+		return &ast.CompositeLiteral{
+			Typ:                 typ,
+			NamedInitializers:   &namedInitializers,
+			UnnamedInitializers: nil,
+			LeftBraceToken:      leftBraceToken,
+		}
+	} else {
+		return &ast.CompositeLiteral{
+			Typ:                 typ,
+			NamedInitializers:   nil,
+			UnnamedInitializers: &unnamedInitializers,
+			LeftBraceToken:      leftBraceToken,
+		}
+	}
+}
+
 func parsePrimary() ast.Expression {
 	var expr ast.Expression
 
@@ -231,8 +370,13 @@ func parsePrimary() ast.Expression {
 		}
 	} else if peek(0).Type == lexer.IDENTIFIER {
 		current++
-		expr = &ast.VariableExpression{
-			Identifier: peek(-1),
+		if peek(0).Type == lexer.LEFT_BRACE {
+			current--
+			expr = parseComposite()
+		} else {
+			expr = &ast.VariableExpression{
+				Identifier: peek(-1),
+			}
 		}
 	} else if peek(0).Type == lexer.MINUS {
 		current++
@@ -271,6 +415,15 @@ func parsePrimary() ast.Expression {
 		}
 	}
 
+	for peek(0).Type == lexer.DOT {
+		current++
+		ident := expect(lexer.IDENTIFIER, "Expect identifier after `.` in get expression.")
+		expr = &ast.GetExpression{
+			Expression: expr,
+			Identifier: ident,
+		}
+	}
+
 	if expr == nil {
 		parseError(peek(0), "Expected expression.")
 	}
@@ -280,12 +433,17 @@ func parsePrimary() ast.Expression {
 
 func parseType() ast.Type {
 	if peek(0).Type == lexer.IDENTIFIER {
-		if peek(0).Lexeme != "int" && peek(0).Lexeme != "float" {
-			parseError(peek(0), "Only types available are: `int` and `float`.")
-		}
 		current++
-		return &ast.Primitive{
-			Name: peek(-1).Lexeme,
+
+		if isIdentifierPrimitive(peek(-1)) {
+			return &ast.Primitive{
+				Name: peek(-1).Lexeme,
+			}
+		} else {
+			return &ast.StructType{
+				Name: peek(-1).Lexeme,
+				// Members are resolved in analysis
+			}
 		}
 	}
 

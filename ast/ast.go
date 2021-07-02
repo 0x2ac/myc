@@ -1,6 +1,7 @@
 package ast
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/kartiknair/myc/lexer"
@@ -21,8 +22,14 @@ type FunctionType struct {
 	ReturnType Type
 }
 
+type StructType struct {
+	Name    string
+	Members []StructMember
+}
+
 func (*Primitive) isType()    {}
 func (*FunctionType) isType() {}
+func (*StructType) isType()   {}
 
 func (self *Primitive) Equals(t Type) bool {
 	if primitiveT, ok := t.(*Primitive); ok {
@@ -66,6 +73,34 @@ func (self *FunctionType) String() string {
 	return fmt.Sprintf("(fn (%s))", params)
 }
 
+func (s *StructType) Equals(t Type) bool {
+	if structType, ok := t.(*StructType); ok {
+		return s.Name == structType.Name
+	}
+
+	return false
+}
+
+func (s *StructType) String() string {
+	membersString := ""
+
+	for _, m := range s.Members {
+		membersString += m.Identifier.Lexeme + " " + m.Type.String()
+	}
+
+	return fmt.Sprintf("%s{%s}", s.Name, membersString)
+}
+
+func (s *StructType) GetMember(name string) (*StructMember, error) {
+	for _, m := range s.Members {
+		if m.Identifier.Lexeme == name {
+			return &m, nil
+		}
+	}
+
+	return nil, errors.New("Could not find member.")
+}
+
 type Statement interface {
 	isStatement()
 }
@@ -80,6 +115,16 @@ type FunctionDeclaration struct {
 	Parameters []Parameter
 	ReturnType Type
 	Block      BlockStatement
+}
+
+type StructDeclaration struct {
+	Identifier lexer.Token
+	Members    []StructMember
+}
+
+type StructMember struct {
+	Identifier lexer.Token
+	Type       Type
 }
 
 type VariableDeclaration struct {
@@ -112,6 +157,7 @@ type BlockStatement struct {
 }
 
 func (*FunctionDeclaration) isStatement() {}
+func (*StructDeclaration) isStatement()   {}
 func (*VariableDeclaration) isStatement() {}
 func (*ConstantDeclaration) isStatement() {}
 func (*PrintStatement) isStatement()      {}
@@ -153,6 +199,26 @@ type CallExpression struct {
 	LeftParenToken lexer.Token
 }
 
+type GetExpression struct {
+	Expression Expression
+	Identifier lexer.Token
+
+	Typ Type
+}
+
+type CompositeLiteral struct {
+	Typ                 Type
+	NamedInitializers   *[]NamedInitializer
+	UnnamedInitializers *[]Expression
+
+	LeftBraceToken lexer.Token
+}
+
+type NamedInitializer struct {
+	Identifier lexer.Token
+	Value      Expression
+}
+
 type Literal struct {
 	LiteralType  lexer.TokenType
 	LiteralValue string
@@ -164,6 +230,8 @@ func (*UnaryExpression) isExpression()    {}
 func (*BinaryExpression) isExpression()   {}
 func (*VariableExpression) isExpression() {}
 func (*CallExpression) isExpression()     {}
+func (*GetExpression) isExpression()      {}
+func (*CompositeLiteral) isExpression()   {}
 func (*Literal) isExpression()            {}
 
 func (self *UnaryExpression) Type() Type {
@@ -176,6 +244,12 @@ func (self *VariableExpression) Type() Type {
 	return self.Typ
 }
 func (self *CallExpression) Type() Type {
+	return self.Typ
+}
+func (self *GetExpression) Type() Type {
+	return self.Typ
+}
+func (self *CompositeLiteral) Type() Type {
 	return self.Typ
 }
 func (self *Literal) Type() Type {
