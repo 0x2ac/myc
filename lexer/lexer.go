@@ -236,29 +236,27 @@ func ScanToken() {
 	case ';':
 		addToken(SEMICOLON, ";")
 	case '\n':
-		{
-			// “if the newline comes after a token that could end a
-			// statement, insert a semicolon”.
-			// Source: https://golang.org/doc/effective_go#semicolons
+		// “if the newline comes after a token that could end a
+		// statement, insert a semicolon”.
+		// Source: https://golang.org/doc/effective_go#semicolons
 
-			if len(tokens) > 0 {
-				currentTokensType := tokens[len(tokens)-1].Type
+		if len(tokens) > 0 {
+			currentTokensType := tokens[len(tokens)-1].Type
 
-				if currentTokensType != SEMICOLON &&
-					(currentTokensType == IDENTIFIER ||
-						currentTokensType == RIGHT_PAREN ||
-						currentTokensType == RIGHT_BRACE ||
-						currentTokensType == RETURN ||
-						currentTokensType == INT ||
-						currentTokensType == FLOAT ||
-						currentTokensType == STRING) {
-					addToken(SEMICOLON, "")
-				}
+			if currentTokensType != SEMICOLON &&
+				(currentTokensType == IDENTIFIER ||
+					currentTokensType == RIGHT_PAREN ||
+					currentTokensType == RIGHT_BRACE ||
+					currentTokensType == RETURN ||
+					currentTokensType == INT ||
+					currentTokensType == FLOAT ||
+					currentTokensType == STRING) {
+				addToken(SEMICOLON, "")
 			}
-
-			line++
-			lineBegin = current
 		}
+
+		line++
+		lineBegin = current
 	case '"':
 		lexString()
 	default:

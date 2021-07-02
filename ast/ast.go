@@ -30,42 +30,42 @@ func (*Primitive) isType()    {}
 func (*FunctionType) isType() {}
 func (*StructType) isType()   {}
 
-func (self *Primitive) Equals(t Type) bool {
-	if primitiveT, ok := t.(*Primitive); ok {
-		return self.Name == primitiveT.Name
+func (p *Primitive) Equals(t Type) bool {
+	if primType, ok := t.(*Primitive); ok {
+		return p.Name == primType.Name
 	}
 
 	return false
 }
 
-func (self *Primitive) String() string {
-	return self.Name
+func (p *Primitive) String() string {
+	return p.Name
 }
 
-func (self *FunctionType) Equals(t Type) bool {
+func (f *FunctionType) Equals(t Type) bool {
 	if funcType, ok := t.(*FunctionType); ok {
-		if len(self.Parameters) != len(funcType.Parameters) {
+		if len(f.Parameters) != len(funcType.Parameters) {
 			return false
 		}
 
 		allParamsSame := true
-		for i, param := range self.Parameters {
+		for i, param := range f.Parameters {
 			if !param.Equals(funcType.Parameters[i]) {
 				allParamsSame = false
 			}
 		}
 
-		return allParamsSame && self.ReturnType.Equals(funcType.ReturnType)
+		return allParamsSame && f.ReturnType.Equals(funcType.ReturnType)
 	}
 
 	return false
 }
 
-func (self *FunctionType) String() string {
+func (f *FunctionType) String() string {
 	params := ""
-	for i, param := range self.Parameters {
+	for i, param := range f.Parameters {
 		params += param.String()
-		if i != len(self.Parameters)-1 {
+		if i != len(f.Parameters)-1 {
 			params += ", "
 		}
 	}
@@ -237,24 +237,24 @@ func (*GetExpression) isExpression()      {}
 func (*CompositeLiteral) isExpression()   {}
 func (*Literal) isExpression()            {}
 
-func (self *UnaryExpression) Type() Type {
-	return self.Typ
+func (u *UnaryExpression) Type() Type {
+	return u.Typ
 }
-func (self *BinaryExpression) Type() Type {
-	return self.Typ
+func (b *BinaryExpression) Type() Type {
+	return b.Typ
 }
-func (self *VariableExpression) Type() Type {
-	return self.Typ
+func (v *VariableExpression) Type() Type {
+	return v.Typ
 }
-func (self *CallExpression) Type() Type {
-	return self.Typ
+func (c *CallExpression) Type() Type {
+	return c.Typ
 }
-func (self *GetExpression) Type() Type {
-	return self.Typ
+func (g *GetExpression) Type() Type {
+	return g.Typ
 }
-func (self *CompositeLiteral) Type() Type {
-	return self.Typ
+func (c *CompositeLiteral) Type() Type {
+	return c.Typ
 }
-func (self *Literal) Type() Type {
-	return self.Typ
+func (l *Literal) Type() Type {
+	return l.Typ
 }
