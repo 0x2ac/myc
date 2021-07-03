@@ -46,7 +46,7 @@ func genStructDeclaration(decl *ast.StructDeclaration) string {
 	membersString := ""
 
 	for _, m := range decl.Members {
-		membersString += m.Type.String() + " " + m.Identifier.Lexeme + ";"
+		membersString += genType(m.Type) + " " + m.Identifier.Lexeme + ";"
 	}
 
 	return fmt.Sprintf(
@@ -61,8 +61,12 @@ func genStructDeclaration(decl *ast.StructDeclaration) string {
 func genFunctionDeclaration(decl *ast.FunctionDeclaration) string {
 	gennedParameters := ""
 
+	if len(decl.Parameters) == 0 {
+		gennedParameters = "void"
+	}
+
 	for i, param := range decl.Parameters {
-		gennedParameters += param.Type.String() + " " + param.Identifier.Lexeme
+		gennedParameters += genType(param.Type) + " " + param.Identifier.Lexeme
 		if i != len(decl.Parameters)-1 {
 			gennedParameters += ", "
 		}
@@ -72,7 +76,7 @@ func genFunctionDeclaration(decl *ast.FunctionDeclaration) string {
 	if decl.ReturnType == nil {
 		ret = "void"
 	} else {
-		ret = decl.ReturnType.String()
+		ret = genType(decl.ReturnType)
 	}
 
 	return fmt.Sprintf(
