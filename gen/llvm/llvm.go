@@ -17,6 +17,8 @@ func genType(t ast.Type) types.Type {
 		return genPrimitive(t.(*ast.Primitive))
 	case *ast.StructType:
 		return typespace[t.(*ast.StructType).Name]
+	case *ast.PointerType:
+		return types.NewPointer(genType(t.(*ast.PointerType).ElType))
 	}
 
 	panic("Type node has invalid static type.")
@@ -195,8 +197,14 @@ func genExpression(expr ast.Expression, block *ir.Block) value.Value {
 		e := expr.(*ast.BinaryExpression)
 		switch e.Operator.Type {
 		case lexer.EQUAL:
-			block.NewStore(genExpression(e.Right, block), genExpression(e.Left, block))
-			return block.NewLoad(genType(e.Left.Type()), genExpression(e.Left, block))
+			// If assigning to a dereference we generate it's nested expression instead.
+			if deref, ok := e.Left.(*ast.Dereference); ok {
+				block.NewStore(genExpression(e.Right, block), genExpression(deref.Expression, block))
+				return block.NewLoad(genType(e.Left.Type()), genExpression(deref.Expression, block))
+			} else {
+				block.NewStore(genExpression(e.Right, block), genExpression(e.Left, block))
+				return block.NewLoad(genType(e.Left.Type()), genExpression(e.Left, block))
+			}
 		case lexer.PLUS:
 			if e.Left.Type().Equals(&ast.Primitive{Name: "float"}) {
 				return block.NewFAdd(genExpression(e.Left, block), genExpression(e.Right, block))
@@ -298,15 +306,32 @@ func genExpression(expr ast.Expression, block *ir.Block) value.Value {
 		}
 
 		return block.NewLoad(t, local)
+
+	case *ast.ReferenceOf:
+		e := expr.(*ast.ReferenceOf)
+		target := genExpression(e.Target, block)
+
+		if loadInst, ok := target.(*ir.InstLoad); ok {
+			return loadInst.Src
+		} else {
+			panic("Internal error: only load instructions can have their reference taken.")
+		}
+	case *ast.Dereference:
+		e := expr.(*ast.Dereference)
+		return block.NewLoad(genType(e.Type()), genExpression(e.Expression, block))
 	case *ast.Literal:
 		e := expr.(*ast.Literal)
 		switch e.LiteralType {
 		case lexer.INT:
 			parsedInt, _ := strconv.ParseInt(e.LiteralValue, 10, 32)
-			return constant.NewInt(types.I32, parsedInt)
+			tmp := block.NewAlloca(types.I32)
+			block.NewStore(constant.NewInt(types.I32, parsedInt), tmp)
+			return block.NewLoad(types.I32, tmp)
 		case lexer.FLOAT:
 			parsedFloat, _ := strconv.ParseFloat(e.LiteralValue, 64)
-			return constant.NewFloat(types.Double, parsedFloat)
+			tmp := block.NewAlloca(types.Double)
+			block.NewStore(constant.NewFloat(types.Double, parsedFloat), tmp)
+			return block.NewLoad(types.Double, tmp)
 		}
 	}
 

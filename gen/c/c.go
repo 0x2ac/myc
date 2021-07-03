@@ -12,6 +12,8 @@ func genType(t ast.Type) string {
 		return t.(*ast.Primitive).Name
 	case *ast.StructType:
 		return t.(*ast.StructType).Name
+	case *ast.PointerType:
+		return fmt.Sprintf("%s*", genType(t.(*ast.PointerType).ElType))
 	}
 
 	panic("Type node has invalid static type.")
@@ -66,9 +68,16 @@ func genFunctionDeclaration(decl *ast.FunctionDeclaration) string {
 		}
 	}
 
+	ret := ""
+	if decl.ReturnType == nil {
+		ret = "void"
+	} else {
+		ret = decl.ReturnType.String()
+	}
+
 	return fmt.Sprintf(
 		"%s %s(%s) %s",
-		decl.ReturnType.String(),
+		ret,
 		decl.Identifier.Lexeme,
 		gennedParameters,
 		genBlockStatement(&decl.Block),
@@ -160,6 +169,10 @@ func genExpression(expr ast.Expression) string {
 		return genGetExpression(expr.(*ast.GetExpression))
 	case *ast.CompositeLiteral:
 		return genCompositeLiteral(expr.(*ast.CompositeLiteral))
+	case *ast.ReferenceOf:
+		return genReferenceOf(expr.(*ast.ReferenceOf))
+	case *ast.Dereference:
+		return genDereference(expr.(*ast.Dereference))
 	case *ast.Literal:
 		return genLiteral(expr.(*ast.Literal))
 	}
@@ -231,6 +244,36 @@ func genCompositeLiteral(compExpr *ast.CompositeLiteral) string {
 		compExpr.Typ.(*ast.StructType).Name,
 		initializerString,
 	)
+}
+
+func genReferenceOf(ref *ast.ReferenceOf) string {
+	isLvalue := false
+	if _, ok := ref.Target.(*ast.VariableExpression); ok {
+		isLvalue = true
+	} else if _, ok := ref.Target.(*ast.GetExpression); ok {
+		isLvalue = true
+	}
+
+	if !isLvalue {
+		// This is kind of hacky, basically using the (type){elements...} syntax
+		// to create a temporary array and putting our target as the first element
+		// and then taking its address. Really all it should compile to is creating
+		// a temporary on the stack and taking its address.
+		//
+		// We only need this hack because when generating C, unlike LLVM, we don't
+		// have access to the current black. So this is a workaround.
+		return fmt.Sprintf(
+			"&((%s[]){%s}[0])",
+			genType(ref.Typ.(*ast.PointerType).ElType),
+			genExpression(ref.Target),
+		)
+	}
+
+	return fmt.Sprintf("&%s", genExpression(ref.Target))
+}
+
+func genDereference(deref *ast.Dereference) string {
+	return fmt.Sprintf("*%s", genExpression(deref.Expression))
 }
 
 func genLiteral(literal *ast.Literal) string {

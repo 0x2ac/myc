@@ -173,11 +173,6 @@ func analyzeExpression(expr ast.Expression) {
 		analyzeExpression(e.Expression)
 
 		structType, ok := e.Expression.Type().(*ast.StructType)
-		err := resolveStructType(structType)
-		if err != nil {
-			analysisError(e.Identifier, "Internal compiler error:"+err.Error())
-		}
-
 		// e.g. 32.value, "hello".foo, etc.
 		if !ok {
 			analysisError(
@@ -187,6 +182,11 @@ func analyzeExpression(expr ast.Expression) {
 					e.Expression.Type().String(),
 				),
 			)
+		}
+
+		err := resolveStructType(structType)
+		if err != nil {
+			analysisError(e.Identifier, "Internal compiler error:"+err.Error())
 		}
 
 		foundMember, ok := structType.GetMember(e.Identifier.Lexeme)
