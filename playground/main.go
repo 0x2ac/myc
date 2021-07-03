@@ -32,6 +32,6 @@ print p2.y + p3.y
 	analyzer.Analyze(parsed)
 	gennedC := gen.C(parsed)
 	fmt.Println(gennedC)
-	// gennedLLVM := gen.LLVM(parsed)
-	// fmt.Println(gennedLLVM)
+	gennedLLVM := gen.LLVM(parsed)
+	fmt.Println(gennedLLVM)
 }

@@ -35,14 +35,14 @@ func genIRFromFile(filename string) string {
 	lpaTime := time.Now()
 
 	if SHOW_TIME_INFO {
-		fmt.Printf("%dus for lexing and parsing and analysis\n", lpaTime.Sub(start).Microseconds())
+		fmt.Printf("  %dus for lexing and parsing and analysis\n", lpaTime.Sub(start).Microseconds())
 	}
 
 	ir := llvmgen.Gen(parsed)
 
 	if SHOW_TIME_INFO {
 		irGenTime := time.Now()
-		fmt.Printf("%dus to generate LLVM IR\n", irGenTime.Sub(lpaTime).Microseconds())
+		fmt.Printf("  %dus to generate LLVM IR\n", irGenTime.Sub(lpaTime).Microseconds())
 	}
 
 	return ir
@@ -50,6 +50,8 @@ func genIRFromFile(filename string) string {
 
 func run(filename string) {
 	ir := genIRFromFile(filename)
+
+	start := time.Now()
 
 	irFile, err := ioutil.TempFile("", "myc-ir--*.ll")
 	if err != nil {
@@ -63,6 +65,11 @@ func run(filename string) {
 	numberOfIRBytes, err := irFile.Write([]byte(ir))
 	if err != nil {
 		log.Fatalf("Failed while writing to temp IR file. Wrote %d bytes.\n%s", numberOfIRBytes, err.Error())
+	}
+
+	irWriteTime := time.Now()
+	if SHOW_TIME_INFO {
+		fmt.Printf("  %dus to write IR to file\n", irWriteTime.Sub(start).Microseconds())
 	}
 
 	irFile.Close()
@@ -80,6 +87,12 @@ func run(filename string) {
 	if err != nil {
 		log.Fatal(err.Error())
 	}
+
+	if SHOW_TIME_INFO {
+		fmt.Printf("  %dms for clang to compile IR to executable\n", time.Since(irWriteTime).Milliseconds())
+	}
+
+	fmt.Println("") // blank line to diffrentiate from logs and program output
 
 	runCmd := exec.Command(executableFile.Name(), os.Args...)
 	runCmd.Stdout = os.Stdout
@@ -107,7 +120,7 @@ func build(filename string, executableName string) {
 
 	irWriteTime := time.Now()
 	if SHOW_TIME_INFO {
-		fmt.Printf("%dus to write IR to file\n", irWriteTime.Sub(start).Microseconds())
+		fmt.Printf("  %dus to write IR to file\n", irWriteTime.Sub(start).Microseconds())
 	}
 
 	compileCommand := exec.Command(
@@ -124,7 +137,7 @@ func build(filename string, executableName string) {
 	}
 
 	if SHOW_TIME_INFO {
-		fmt.Printf("%dms for clang to compile IR to executable\n", time.Since(irWriteTime).Milliseconds())
+		fmt.Printf("  %dms for clang to compile IR to executable\n", time.Since(irWriteTime).Milliseconds())
 	}
 }
 
@@ -146,6 +159,7 @@ func main() {
 					if filename == "" {
 						return errors.New("Source file not provided.")
 					}
+					fmt.Println("Compiling:")
 					run(filename)
 					return nil
 				},

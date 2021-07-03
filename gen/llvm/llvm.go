@@ -11,52 +11,18 @@ import (
 	"github.com/llir/llvm/ir/value"
 )
 
-type ValueTable struct {
-	values    map[string]value.Value
-	enclosing *ValueTable
-}
-
-func NewValueTable() *ValueTable {
-	return &ValueTable{
-		values:    make(map[string]value.Value),
-		enclosing: nil,
-	}
-}
-
-func NewValueTableFromEnclosing(enclosing *ValueTable) *ValueTable {
-	return &ValueTable{
-		values:    make(map[string]value.Value),
-		enclosing: enclosing,
-	}
-}
-
-func (s *ValueTable) get(name string) value.Value {
-	if value, ok := s.values[name]; ok {
-		return value
-	}
-
-	return s.enclosing.get(name)
-}
-
-func (s *ValueTable) set(name string, v value.Value) {
-	s.values[name] = v
-}
-
-func (s *ValueTable) remove(name string) {
-	delete(s.values, name)
-}
-
 func genType(t ast.Type) types.Type {
 	switch t.(type) {
 	case *ast.Primitive:
 		return genPrimitive(t.(*ast.Primitive))
+	case *ast.StructType:
+		return typespace[t.(*ast.StructType).Name]
 	}
 
 	panic("Type node has invalid static type.")
 }
 
 func genPrimitive(primitive *ast.Primitive) types.Type {
-	// Assuming that our primitive type names are predefined in our C code.
 	switch primitive.Name {
 	case "int":
 		return types.I32
@@ -69,7 +35,8 @@ func genPrimitive(primitive *ast.Primitive) types.Type {
 
 var module *ir.Module
 var printfDeclaration *ir.Func
-var namespace *ValueTable
+var namespace = make(map[string]value.Value)
+var typespace = make(map[string]types.Type)
 
 func getFormatStringForType(t ast.Type) string {
 	if primitive, ok := t.(*ast.Primitive); ok {
@@ -79,6 +46,8 @@ func getFormatStringForType(t ast.Type) string {
 		case "float":
 			return "%f"
 		}
+	} else if _, ok := t.(*ast.StructType); ok {
+		return "%p"
 	}
 
 	panic("Invalid type passed to `getFormatStringForType`.")
@@ -86,6 +55,16 @@ func getFormatStringForType(t ast.Type) string {
 
 func genStatement(stmt ast.Statement, block *ir.Block) {
 	switch stmt.(type) {
+	case *ast.StructDeclaration:
+		s := stmt.(*ast.StructDeclaration)
+
+		var fields []types.Type
+		for _, m := range s.Members {
+			fields = append(fields, genType(m.Type))
+		}
+
+		t := types.NewStruct(fields...)
+		typespace[s.Identifier.Lexeme] = t
 	case *ast.FunctionDeclaration:
 		s := stmt.(*ast.FunctionDeclaration)
 		irParams := []*ir.Param{}
@@ -103,12 +82,12 @@ func genStatement(stmt ast.Statement, block *ir.Block) {
 		fun := module.NewFunc(s.Identifier.Lexeme, genType(s.ReturnType), irParams...)
 		funBlock := fun.NewBlock("")
 
-		namespace.set(s.Identifier.Lexeme, fun)
+		namespace[s.Identifier.Lexeme] = fun
 
 		for i, param := range s.Parameters {
 			variable := funBlock.NewAlloca(genType(param.Type))
 			funBlock.NewStore(fun.Params[i], variable)
-			namespace.set(param.Identifier.Lexeme, variable)
+			namespace[param.Identifier.Lexeme] = variable
 		}
 
 		for _, stmt := range s.Block.Statements {
@@ -116,7 +95,7 @@ func genStatement(stmt ast.Statement, block *ir.Block) {
 		}
 
 		for _, param := range s.Parameters {
-			namespace.remove(param.Identifier.Lexeme)
+			delete(namespace, param.Identifier.Lexeme)
 		}
 	case *ast.VariableDeclaration:
 		s := stmt.(*ast.VariableDeclaration)
@@ -124,12 +103,12 @@ func genStatement(stmt ast.Statement, block *ir.Block) {
 		block.NewStore(genExpression(s.Value, block), variable)
 		//                           ^^^^^^^
 		// TODO: Need assure that this is 0-value intialized based on the type.
-		namespace.set(s.Identifier.Lexeme, variable)
+		namespace[s.Identifier.Lexeme] = variable
 	case *ast.ConstantDeclaration:
 		s := stmt.(*ast.ConstantDeclaration)
 		variable := block.NewAlloca(genType(s.Value.Type()))
 		block.NewStore(genExpression(s.Value, block), variable)
-		namespace.set(s.Identifier.Lexeme, variable)
+		namespace[s.Identifier.Lexeme] = variable
 	case *ast.PrintStatement:
 		s := stmt.(*ast.PrintStatement)
 
@@ -137,7 +116,14 @@ func genStatement(stmt ast.Statement, block *ir.Block) {
 		printfArgs := []value.Value{}
 		for i, expr := range s.Expressions {
 			formatString += getFormatStringForType(expr.Type())
-			printfArgs = append(printfArgs, genExpression(expr, block))
+
+			e := genExpression(expr, block)
+			if _, ok := e.Type().(*types.StructType); ok {
+				printfArgs = append(printfArgs, e.(*ir.InstLoad).Src)
+			} else {
+				printfArgs = append(printfArgs, e)
+			}
+
 			if i != len(s.Expressions)-1 {
 				formatString += " "
 			} else {
@@ -221,7 +207,7 @@ func genExpression(expr ast.Expression, block *ir.Block) value.Value {
 
 		var callee value.Value
 		if varExpr, ok := e.Callee.(*ast.VariableExpression); ok {
-			callee = namespace.get(varExpr.Identifier.Lexeme)
+			callee = namespace[varExpr.Identifier.Lexeme]
 		} else {
 			panic("Can only generate variables as calle.")
 		}
@@ -229,8 +215,69 @@ func genExpression(expr ast.Expression, block *ir.Block) value.Value {
 		return block.NewCall(callee, args...)
 	case *ast.VariableExpression:
 		e := expr.(*ast.VariableExpression)
-		resolvedVariable := namespace.get(e.Identifier.Lexeme)
+		resolvedVariable := namespace[e.Identifier.Lexeme]
 		return block.NewLoad(resolvedVariable.Type().(*types.PointerType).ElemType, resolvedVariable)
+	case *ast.GetExpression:
+		e := expr.(*ast.GetExpression)
+		st := e.Expression.Type().(*ast.StructType)
+
+		memberIndex := 0
+		for i, m := range st.Members {
+			if m.Identifier.Lexeme == e.Identifier.Lexeme {
+				memberIndex = i
+			}
+		}
+
+		expr := genExpression(e.Expression, block)
+		var gep *ir.InstGetElementPtr
+
+		if loadInst, ok := expr.(*ir.InstLoad); ok {
+			gep = block.NewGetElementPtr(
+				typespace[st.Name],
+				loadInst.Src,
+				constant.NewInt(types.I32, int64(0)),
+				constant.NewInt(types.I32, int64(memberIndex)),
+			)
+		} else {
+			gep = block.NewGetElementPtr(
+				typespace[st.Name],
+				expr,
+				constant.NewInt(types.I32, int64(0)),
+				constant.NewInt(types.I32, int64(memberIndex)),
+			)
+		}
+
+		return block.NewLoad(genType(st.Members[memberIndex].Type), gep)
+	case *ast.CompositeLiteral:
+		e := expr.(*ast.CompositeLiteral)
+		st := e.Typ.(*ast.StructType)
+		t := typespace[st.Name]
+
+		local := block.NewAlloca(t)
+
+		if e.NamedInitializers != nil {
+			for i, initializer := range *e.NamedInitializers {
+				tmp := block.NewGetElementPtr(
+					t,
+					local,
+					constant.NewInt(types.I32, int64(0)),
+					constant.NewInt(types.I32, int64(i)),
+				)
+				block.NewStore(genExpression(initializer.Value, block), tmp)
+			}
+		} else {
+			for i, initializer := range *e.UnnamedInitializers {
+				tmp := block.NewGetElementPtr(
+					t,
+					local,
+					constant.NewInt(types.I32, int64(0)),
+					constant.NewInt(types.I32, int64(i)),
+				)
+				block.NewStore(genExpression(initializer, block), tmp)
+			}
+		}
+
+		return block.NewLoad(t, local)
 	case *ast.Literal:
 		e := expr.(*ast.Literal)
 		switch e.LiteralType {
@@ -251,7 +298,6 @@ func Gen(statements []ast.Statement) string {
 
 	printfDeclaration = module.NewFunc("printf", types.I32, ir.NewParam("format", types.I8Ptr))
 	printfDeclaration.Sig.Variadic = true
-	namespace = NewValueTable()
 
 	cmain := module.NewFunc("main", types.I32)
 	cmainBlock := cmain.NewBlock("main_block")
