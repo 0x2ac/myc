@@ -69,6 +69,27 @@ func Analyze(statements []ast.Statement) {
 	}
 }
 
+func resolveStructType(st *ast.StructType) error {
+	t, err := typespace.get(st.Name)
+
+	if err != nil {
+		return errors.New(fmt.Sprintf("Could not resolve struct type: '%s'", st.Name))
+	}
+
+	*st = *t.(*ast.StructType)
+
+	for _, m := range st.Members {
+		if _, ok := m.Type.(*ast.StructType); ok {
+			err = resolveStructType(m.Type.(*ast.StructType))
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
 func analyzeExpression(expr ast.Expression) {
 	switch expr.(type) {
 	case *ast.UnaryExpression:
@@ -152,6 +173,10 @@ func analyzeExpression(expr ast.Expression) {
 		analyzeExpression(e.Expression)
 
 		structType, ok := e.Expression.Type().(*ast.StructType)
+		err := resolveStructType(structType)
+		if err != nil {
+			analysisError(e.Identifier, "Internal compiler error:"+err.Error())
+		}
 
 		// e.g. 32.value, "hello".foo, etc.
 		if !ok {
@@ -179,21 +204,12 @@ func analyzeExpression(expr ast.Expression) {
 		e.Typ = foundMember.Type
 	case *ast.CompositeLiteral:
 		e := expr.(*ast.CompositeLiteral)
-
-		r, err := typespace.get(e.Typ.(*ast.StructType).Name)
+		r := e.Typ.(*ast.StructType)
+		err := resolveStructType(r)
 
 		if err != nil {
-			analysisError(
-				e.LeftBraceToken,
-				fmt.Sprintf(
-					"Named type: '%s' could not be resolved.",
-					e.Typ.(*ast.StructType).Name,
-				),
-			)
+			analysisError(e.LeftBraceToken, err.Error())
 		}
-
-		resolvedStructType := r.(*ast.StructType)
-		e.Typ = resolvedStructType
 
 		if e.NamedInitializers == nil && e.UnnamedInitializers == nil {
 			analysisError(
@@ -201,13 +217,13 @@ func analyzeExpression(expr ast.Expression) {
 				"Missing intializers for members in composite literal.",
 			)
 		} else if e.NamedInitializers != nil {
-			if len(*e.NamedInitializers) != len(resolvedStructType.Members) {
+			if len(*e.NamedInitializers) != len(r.Members) {
 				analysisError(
 					e.LeftBraceToken,
 					fmt.Sprintf(
 						"Number of named intitializers does not match. Expected: %d for type '%s', instead got: %d.",
-						len(resolvedStructType.Members),
-						resolvedStructType.Name,
+						len(r.Members),
+						r.Name,
 						len(*e.NamedInitializers),
 					),
 				)
@@ -216,7 +232,7 @@ func analyzeExpression(expr ast.Expression) {
 			for _, initializer := range *e.NamedInitializers {
 				analyzeExpression(initializer.Value)
 
-				resolvedMember, ok := resolvedStructType.GetMember(initializer.Identifier.Lexeme)
+				resolvedMember, ok := r.GetMember(initializer.Identifier.Lexeme)
 
 				// Check if the resolved type has a field with that name
 				if !ok {
@@ -224,7 +240,7 @@ func analyzeExpression(expr ast.Expression) {
 						initializer.Identifier,
 						fmt.Sprintf(
 							"Type: '%s' does not have a field with name: '%s'.",
-							resolvedStructType.Name,
+							r.Name,
 							initializer.Identifier.Lexeme,
 						),
 					)
@@ -236,7 +252,7 @@ func analyzeExpression(expr ast.Expression) {
 						initializer.Identifier,
 						fmt.Sprintf(
 							"`%s.%s` has type: '%s', got expression of type: '%s'.",
-							resolvedStructType.Name,
+							r.Name,
 							initializer.Identifier.Lexeme,
 							resolvedMember.Type.String(),
 							initializer.Value.Type().String(),
@@ -245,13 +261,13 @@ func analyzeExpression(expr ast.Expression) {
 				}
 			}
 		} else if e.UnnamedInitializers != nil {
-			if len(*e.UnnamedInitializers) != len(resolvedStructType.Members) {
+			if len(*e.UnnamedInitializers) != len(r.Members) {
 				analysisError(
 					e.LeftBraceToken,
 					fmt.Sprintf(
 						"Number of anonymous intitializers does not match. Expected: %d for type '%s', instead got: %d.",
-						len(resolvedStructType.Members),
-						resolvedStructType.Name,
+						len(r.Members),
+						r.Name,
 						len(*e.UnnamedInitializers),
 					),
 				)
@@ -260,12 +276,12 @@ func analyzeExpression(expr ast.Expression) {
 			for i, intializer := range *e.UnnamedInitializers {
 				analyzeExpression(intializer)
 
-				if !resolvedStructType.Members[i].Type.Equals(intializer.Type()) {
+				if !r.Members[i].Type.Equals(intializer.Type()) {
 					analysisError(
 						e.LeftBraceToken,
 						fmt.Sprintf(
 							"Positional initializer has incorrect type. Expected value of type: '%s' instead got value of type: '%s'.",
-							resolvedStructType.Members[i].Type.String(),
+							r.Members[i].Type.String(),
 							intializer.Type().String(),
 						),
 					)
@@ -273,7 +289,7 @@ func analyzeExpression(expr ast.Expression) {
 			}
 		}
 
-		e.Typ = resolvedStructType
+		e.Typ = r
 	case *ast.Literal:
 		e := expr.(*ast.Literal)
 		switch e.LiteralType {
