@@ -79,7 +79,14 @@ func genStatement(stmt ast.Statement, block *ir.Block) {
 			)
 		}
 
-		fun := module.NewFunc(s.Identifier.Lexeme, genType(s.ReturnType), irParams...)
+		var retTyp types.Type
+		if s.ReturnType == nil {
+			retTyp = types.Void
+		} else {
+			retTyp = genType(s.ReturnType)
+		}
+
+		fun := module.NewFunc(s.Identifier.Lexeme, retTyp, irParams...)
 		funBlock := fun.NewBlock("")
 
 		namespace[s.Identifier.Lexeme] = fun
@@ -96,6 +103,10 @@ func genStatement(stmt ast.Statement, block *ir.Block) {
 
 		for _, param := range s.Parameters {
 			delete(namespace, param.Identifier.Lexeme)
+		}
+
+		if funBlock.Term == nil {
+			funBlock.NewRet(nil)
 		}
 	case *ast.VariableDeclaration:
 		s := stmt.(*ast.VariableDeclaration)
