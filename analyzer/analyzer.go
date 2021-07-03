@@ -252,7 +252,7 @@ func analyzeExpression(expr ast.Expression) {
 						"Number of anonymous intitializers does not match. Expected: %d for type '%s', instead got: %d.",
 						len(resolvedStructType.Members),
 						resolvedStructType.Name,
-						len(*e.NamedInitializers),
+						len(*e.UnnamedInitializers),
 					),
 				)
 			}
@@ -339,6 +339,13 @@ func analyzeStatement(statement ast.Statement) {
 		}
 	case *ast.StructDeclaration:
 		s := statement.(*ast.StructDeclaration)
+
+		for _, m := range s.Members {
+			if m.Type.Equals(&ast.StructType{Name: s.Identifier.Lexeme}) {
+				analysisError(m.Identifier, "Cannot nest struct type as size would be unknown.")
+			}
+		}
+
 		err := typespace.declare(
 			s.Identifier.Lexeme,
 			&ast.StructType{

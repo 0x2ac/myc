@@ -9,19 +9,18 @@ import (
 func genType(t ast.Type) string {
 	switch t.(type) {
 	case *ast.Primitive:
-		return genPrimitive(t.(*ast.Primitive))
+		return t.(*ast.Primitive).Name
+	case *ast.StructType:
+		return t.(*ast.StructType).Name
 	}
 
 	panic("Type node has invalid static type.")
 }
 
-func genPrimitive(primitive *ast.Primitive) string {
-	// Assuming that our primitive type names are predefined in our C code.
-	return primitive.Name
-}
-
 func genStatement(stmt ast.Statement) string {
 	switch stmt.(type) {
+	case *ast.StructDeclaration:
+		return genStructDeclaration(stmt.(*ast.StructDeclaration))
 	case *ast.FunctionDeclaration:
 		return genFunctionDeclaration(stmt.(*ast.FunctionDeclaration))
 	case *ast.VariableDeclaration:
@@ -39,6 +38,22 @@ func genStatement(stmt ast.Statement) string {
 	}
 
 	panic("Statement node has invalid static type.")
+}
+
+func genStructDeclaration(decl *ast.StructDeclaration) string {
+	membersString := ""
+
+	for _, m := range decl.Members {
+		membersString += m.Type.String() + " " + m.Identifier.Lexeme + ";"
+	}
+
+	return fmt.Sprintf(
+		"typedef struct %s %s;struct %s {%s};",
+		decl.Identifier.Lexeme,
+		decl.Identifier.Lexeme,
+		decl.Identifier.Lexeme,
+		membersString,
+	)
 }
 
 func genFunctionDeclaration(decl *ast.FunctionDeclaration) string {
@@ -86,6 +101,8 @@ func getFormatStringForType(t ast.Type) string {
 		case "float":
 			return "%f"
 		}
+	} else if _, ok := t.(*ast.StructType); ok {
+		return "%p"
 	}
 
 	panic("Invalid type passed to `getFormatStringForType`.")
@@ -96,7 +113,14 @@ func genPrintStatement(printStmt *ast.PrintStatement) string {
 	arguments := ""
 	for i, expr := range printStmt.Expressions {
 		formatString += getFormatStringForType(expr.Type())
-		arguments += genExpression(expr)
+
+		if _, ok := expr.Type().(*ast.StructType); ok {
+			// For now structs only get their reference printed
+			arguments += "&" + genExpression(expr)
+		} else {
+			arguments += genExpression(expr)
+		}
+
 		if i != len(printStmt.Expressions)-1 {
 			formatString += " "
 			arguments += ", "
@@ -132,6 +156,10 @@ func genExpression(expr ast.Expression) string {
 		return genCallExpression(expr.(*ast.CallExpression))
 	case *ast.VariableExpression:
 		return genVariableExpression(expr.(*ast.VariableExpression))
+	case *ast.GetExpression:
+		return genGetExpression(expr.(*ast.GetExpression))
+	case *ast.CompositeLiteral:
+		return genCompositeLiteral(expr.(*ast.CompositeLiteral))
 	case *ast.Literal:
 		return genLiteral(expr.(*ast.Literal))
 	}
@@ -171,6 +199,38 @@ func genCallExpression(callExpr *ast.CallExpression) string {
 
 func genVariableExpression(varExpr *ast.VariableExpression) string {
 	return varExpr.Identifier.Lexeme
+}
+
+func genGetExpression(getExpr *ast.GetExpression) string {
+	return fmt.Sprintf("%s.%s", genExpression(getExpr.Expression), getExpr.Identifier.Lexeme)
+}
+
+func genCompositeLiteral(compExpr *ast.CompositeLiteral) string {
+	initializerString := ""
+
+	if compExpr.NamedInitializers != nil {
+		for i, initializer := range *compExpr.NamedInitializers {
+			initializerString += "." + initializer.Identifier.Lexeme + " = " + genExpression(initializer.Value)
+
+			if i != len(*compExpr.NamedInitializers)-1 {
+				initializerString += ", "
+			}
+		}
+	} else {
+		for i, initializer := range *compExpr.UnnamedInitializers {
+			initializerString += genExpression(initializer)
+
+			if i != len(*compExpr.UnnamedInitializers)-1 {
+				initializerString += ", "
+			}
+		}
+	}
+
+	return fmt.Sprintf(
+		"(%s){%s}",
+		compExpr.Typ.(*ast.StructType).Name,
+		initializerString,
+	)
 }
 
 func genLiteral(literal *ast.Literal) string {

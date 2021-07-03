@@ -1,7 +1,10 @@
 package main
 
 import (
+	"fmt"
+
 	"github.com/kartiknair/myc/analyzer"
+	"github.com/kartiknair/myc/gen"
 	"github.com/kartiknair/myc/lexer"
 	"github.com/kartiknair/myc/parser"
 )
@@ -27,8 +30,8 @@ print p2.y + p3.y
 	tokens := lexer.Lex(code)
 	parsed := parser.Parse(tokens)
 	analyzer.Analyze(parsed)
-	// gennedC := gen.C(parsed)
-	// fmt.Println(gennedC)
+	gennedC := gen.C(parsed)
+	fmt.Println(gennedC)
 	// gennedLLVM := gen.LLVM(parsed)
 	// fmt.Println(gennedLLVM)
 }
