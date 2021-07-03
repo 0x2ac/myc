@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"fmt"
 	"log"
 
 	"github.com/kartiknair/myc/ast"
@@ -382,6 +383,11 @@ func parsePrimary() ast.Expression {
 			Operator: peek(-1),
 			Value:    parsePrimary(),
 		}
+	} else if peek(0).Type == lexer.AND {
+		current++
+		expr = &ast.ReferenceOf{
+			Target: parsePrimary(),
+		}
 	}
 
 	// Looping to catch multiple calls
@@ -410,6 +416,14 @@ func parsePrimary() ast.Expression {
 			Callee:         expr,
 			Arguments:      arguments,
 			LeftParenToken: leftParenToken,
+		}
+	}
+
+	for peek(0).Type == lexer.CARET {
+		current++
+		expr = &ast.Dereference{
+			Expression: expr,
+			StarToken:  peek(-1),
 		}
 	}
 
@@ -443,9 +457,21 @@ func parseType() ast.Type {
 				// Members are resolved in analysis
 			}
 		}
+	} else if peek(0).Type == lexer.STAR {
+		current++
+		return &ast.PointerType{
+			ElType: parseType(),
+		}
 	}
 
-	parseError(peek(0), "Only named types are allowed.")
+	parseError(
+		peek(0),
+		fmt.Sprintf(
+			"Expected type, found token: '%s' instead.",
+			peek(0).Lexeme,
+		),
+	)
+
 	panic("")
 }
 

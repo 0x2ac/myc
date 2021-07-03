@@ -45,6 +45,8 @@ const (
 	COMMA
 	DOT
 	COLON
+	CARET
+	AND
 
 	binaryop_begin
 	EQUAL
@@ -208,6 +210,10 @@ func ScanToken() {
 		addToken(DOT, "")
 	case ':':
 		addToken(COLON, "")
+	case '&':
+		addToken(AND, "")
+	case '^':
+		addToken(CARET, "")
 	case '-':
 		addToken(MINUS, "")
 	case '+':
@@ -250,6 +256,7 @@ func ScanToken() {
 					currentTokensType == RETURN ||
 					currentTokensType == INT ||
 					currentTokensType == FLOAT ||
+					currentTokensType == CARET ||
 					currentTokensType == STRING) {
 				addToken(SEMICOLON, "")
 			}

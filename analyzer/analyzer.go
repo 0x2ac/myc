@@ -290,6 +290,26 @@ func analyzeExpression(expr ast.Expression) {
 		}
 
 		e.Typ = r
+	case *ast.ReferenceOf:
+		e := expr.(*ast.ReferenceOf)
+		analyzeExpression(e.Target)
+		e.Typ = &ast.PointerType{ElType: e.Target.Type()}
+	case *ast.Dereference:
+		e := expr.(*ast.Dereference)
+		analyzeExpression(e.Expression)
+
+		ptrType, ok := e.Expression.Type().(*ast.PointerType)
+		if !ok {
+			analysisError(
+				e.StarToken,
+				fmt.Sprintf(
+					"Dereference of non-pointer type: '%s'",
+					e.Expression.Type().String(),
+				),
+			)
+		}
+
+		e.Typ = ptrType.ElType
 	case *ast.Literal:
 		e := expr.(*ast.Literal)
 		switch e.LiteralType {

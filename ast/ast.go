@@ -26,9 +26,14 @@ type StructType struct {
 	Members []StructMember
 }
 
+type PointerType struct {
+	ElType Type
+}
+
 func (*Primitive) isType()    {}
 func (*FunctionType) isType() {}
 func (*StructType) isType()   {}
+func (*PointerType) isType()  {}
 
 func (p *Primitive) Equals(t Type) bool {
 	if primType, ok := t.(*Primitive); ok {
@@ -102,6 +107,18 @@ func (s *StructType) GetMember(name string) (*StructMember, bool) {
 	}
 
 	return nil, false
+}
+
+func (p *PointerType) Equals(t Type) bool {
+	if ptrType, ok := t.(*PointerType); ok {
+		return p.ElType.Equals(ptrType.ElType)
+	}
+
+	return false
+}
+
+func (p *PointerType) String() string {
+	return fmt.Sprintf("*%s", p.ElType.String())
 }
 
 type Statement interface {
@@ -222,6 +239,19 @@ type NamedInitializer struct {
 	Value      Expression
 }
 
+type ReferenceOf struct {
+	Target Expression
+
+	Typ Type
+}
+
+type Dereference struct {
+	Expression Expression
+
+	Typ       Type
+	StarToken lexer.Token
+}
+
 type Literal struct {
 	LiteralType  lexer.TokenType
 	LiteralValue string
@@ -235,6 +265,8 @@ func (*VariableExpression) isExpression() {}
 func (*CallExpression) isExpression()     {}
 func (*GetExpression) isExpression()      {}
 func (*CompositeLiteral) isExpression()   {}
+func (*ReferenceOf) isExpression()        {}
+func (*Dereference) isExpression()        {}
 func (*Literal) isExpression()            {}
 
 func (u *UnaryExpression) Type() Type {
@@ -254,6 +286,12 @@ func (g *GetExpression) Type() Type {
 }
 func (c *CompositeLiteral) Type() Type {
 	return c.Typ
+}
+func (r *ReferenceOf) Type() Type {
+	return r.Typ
+}
+func (r *Dereference) Type() Type {
+	return r.Typ
 }
 func (l *Literal) Type() Type {
 	return l.Typ

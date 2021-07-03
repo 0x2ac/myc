@@ -1,0 +1,23 @@
+struct Container {
+    value *int
+}
+
+fun byRef(c *Container) {
+    print c.value^
+    c.value^ = 42
+}
+
+fun byValue(c Container) {
+    print c.value^
+    c.value^ = 42
+}
+
+var n1 = 32
+var c1 = Container{&n1}
+var c2 = Container{value: &13}
+
+byValue(c1)
+byRef(&c1)
+
+byValue(c2)
+byRef(&c2)
