@@ -25,12 +25,12 @@ var l = Line{
     end:   p3,
 }
 
-fun xsum(line Line) int {
-    return line.begin.x + line.end.x
+fun xsum(l Line) int {
+    return l.begin.x + l.end.x
 }
 
-fun ysum(line Line) int {
-    return line.begin.y + line.end.y
+fun ysum(l Line) int {
+    return l.begin.y + l.end.y
 }
 
 print l

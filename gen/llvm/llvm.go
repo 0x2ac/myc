@@ -90,10 +90,16 @@ func genStatement(stmt ast.Statement, block *ir.Block) {
 		funBlock := fun.NewBlock("")
 
 		namespace[s.Identifier.Lexeme] = fun
+		shadowed := make(map[string]value.Value)
 
 		for i, param := range s.Parameters {
 			variable := funBlock.NewAlloca(genType(param.Type))
 			funBlock.NewStore(fun.Params[i], variable)
+
+			if oldVal, ok := namespace[param.Identifier.Lexeme]; ok {
+				shadowed[param.Identifier.Lexeme] = oldVal
+			}
+
 			namespace[param.Identifier.Lexeme] = variable
 		}
 
@@ -103,6 +109,9 @@ func genStatement(stmt ast.Statement, block *ir.Block) {
 
 		for _, param := range s.Parameters {
 			delete(namespace, param.Identifier.Lexeme)
+			if oldVal, ok := shadowed[param.Identifier.Lexeme]; ok {
+				namespace[param.Identifier.Lexeme] = oldVal
+			}
 		}
 
 		if funBlock.Term == nil {
