@@ -390,49 +390,48 @@ func parsePrimary() ast.Expression {
 		}
 	}
 
-	// Looping to catch multiple calls
-	// e.g. foo()()()
-	for peek(0).Type == lexer.LEFT_PAREN {
-		// CallExpression
-		leftParenToken := peek(0)
+	for peek(0).Type == lexer.LEFT_PAREN || peek(0).Type == lexer.DOT || peek(0).Type == lexer.CARET {
+		if peek(0).Type == lexer.LEFT_PAREN {
+			leftParenToken := peek(0)
 
-		current++
-		arguments := []ast.Expression{}
+			current++
+			arguments := []ast.Expression{}
 
-		if peek(0).Type != lexer.RIGHT_PAREN {
-			for {
-				arguments = append(arguments, parseExpression())
+			if peek(0).Type != lexer.RIGHT_PAREN {
+				for {
+					arguments = append(arguments, parseExpression())
 
-				if peek(0).Type != lexer.COMMA {
-					break
-				} else {
-					current++ // skip the comma
+					if peek(0).Type != lexer.COMMA {
+						break
+					} else {
+						current++ // skip the comma
+					}
 				}
+			}
+
+			expect(lexer.RIGHT_PAREN, "Missing closing parenthesis in function call.")
+			expr = &ast.CallExpression{
+				Callee:         expr,
+				Arguments:      arguments,
+				LeftParenToken: leftParenToken,
 			}
 		}
 
-		expect(lexer.RIGHT_PAREN, "Missing closing parenthesis in function call.")
-		expr = &ast.CallExpression{
-			Callee:         expr,
-			Arguments:      arguments,
-			LeftParenToken: leftParenToken,
+		if peek(0).Type == lexer.DOT {
+			current++
+			ident := expect(lexer.IDENTIFIER, "Expect identifier after `.` in get expression.")
+			expr = &ast.GetExpression{
+				Expression: expr,
+				Identifier: ident,
+			}
 		}
-	}
 
-	for peek(0).Type == lexer.CARET {
-		current++
-		expr = &ast.Dereference{
-			Expression: expr,
-			StarToken:  peek(-1),
-		}
-	}
-
-	for peek(0).Type == lexer.DOT {
-		current++
-		ident := expect(lexer.IDENTIFIER, "Expect identifier after `.` in get expression.")
-		expr = &ast.GetExpression{
-			Expression: expr,
-			Identifier: ident,
+		if peek(0).Type == lexer.CARET {
+			current++
+			expr = &ast.Dereference{
+				Expression: expr,
+				StarToken:  peek(-1),
+			}
 		}
 	}
 
