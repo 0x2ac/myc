@@ -13,6 +13,8 @@ var Keywords = [...]string{
 	"fun",
 	"return",
 	"struct",
+	"true",
+	"false",
 }
 
 type Pos struct {
@@ -36,6 +38,8 @@ const (
 	FUN
 	RETURN
 	STRUCT
+	TRUE
+	FALSE
 	keyword_end
 
 	LEFT_PAREN
@@ -47,6 +51,7 @@ const (
 	COLON
 	CARET
 	AND
+	BANG
 
 	binaryop_begin
 	EQUAL
@@ -55,6 +60,16 @@ const (
 	STAR
 	SLASH
 	PERCENT
+
+	LESSER
+	GREATER
+	LESSER_EQUAL
+	GREATER_EQUAL
+	EQUAL_EQUAL
+	BANG_EQUAL
+
+	AND_AND
+	OR_OR
 	binaryop_end
 
 	SEMICOLON
@@ -211,7 +226,31 @@ func ScanToken() {
 	case ':':
 		addToken(COLON, "")
 	case '&':
-		addToken(AND, "")
+		if match('&') {
+			addToken(AND_AND, "")
+		} else {
+			addToken(AND, "")
+		}
+	case '|':
+		if match('|') {
+			addToken(OR_OR, "")
+		} else {
+			lexError(line, "Expected token: `|` after `|`.")
+		}
+	case '!':
+		addToken(BANG, "")
+	case '<':
+		if match('=') {
+			addToken(LESSER_EQUAL, "")
+		} else {
+			addToken(LESSER, "")
+		}
+	case '>':
+		if match('=') {
+			addToken(GREATER_EQUAL, "")
+		} else {
+			addToken(GREATER, "")
+		}
 	case '^':
 		addToken(CARET, "")
 	case '-':
@@ -223,7 +262,11 @@ func ScanToken() {
 	case '%':
 		addToken(PERCENT, "")
 	case '=':
-		addToken(EQUAL, "")
+		if match('=') {
+			addToken(EQUAL_EQUAL, "")
+		} else {
+			addToken(EQUAL, "")
+		}
 	case '/':
 		if match('/') {
 			// a comment goes until the end of the line.
@@ -256,6 +299,8 @@ func ScanToken() {
 					currentTokensType == RETURN ||
 					currentTokensType == INT ||
 					currentTokensType == FLOAT ||
+					currentTokensType == TRUE ||
+					currentTokensType == FALSE ||
 					currentTokensType == CARET ||
 					currentTokensType == STRING) {
 				addToken(SEMICOLON, "")

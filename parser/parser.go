@@ -16,6 +16,7 @@ var (
 var primitives = [...]string{
 	"int",
 	"float",
+	"bool",
 }
 
 func isIdentifierPrimitive(ident lexer.Token) bool {
@@ -222,8 +223,8 @@ func parseExpression() ast.Expression {
 type associativity int
 
 const (
-	associativeLeft associativity = iota
-	associativeRight
+	ltr associativity = iota
+	rtl
 )
 
 type opInfo struct {
@@ -232,12 +233,25 @@ type opInfo struct {
 }
 
 var operatorPrecedenceMap = map[lexer.TokenType]opInfo{
-	lexer.EQUAL:   {precedence: 1, associativity: associativeRight},
-	lexer.PLUS:    {precedence: 2, associativity: associativeLeft},
-	lexer.MINUS:   {precedence: 2, associativity: associativeLeft},
-	lexer.PERCENT: {precedence: 2, associativity: associativeLeft},
-	lexer.STAR:    {precedence: 3, associativity: associativeLeft},
-	lexer.SLASH:   {precedence: 3, associativity: associativeLeft},
+	lexer.PERCENT: {precedence: 6, associativity: ltr},
+	lexer.STAR:    {precedence: 6, associativity: ltr},
+	lexer.SLASH:   {precedence: 6, associativity: ltr},
+
+	lexer.PLUS:  {precedence: 5, associativity: ltr},
+	lexer.MINUS: {precedence: 5, associativity: ltr},
+
+	lexer.LESSER:        {precedence: 4, associativity: ltr},
+	lexer.LESSER_EQUAL:  {precedence: 4, associativity: ltr},
+	lexer.GREATER:       {precedence: 4, associativity: ltr},
+	lexer.GREATER_EQUAL: {precedence: 4, associativity: ltr},
+
+	lexer.EQUAL_EQUAL: {precedence: 3, associativity: ltr},
+	lexer.BANG_EQUAL:  {precedence: 3, associativity: ltr},
+
+	lexer.AND_AND: {precedence: 2, associativity: ltr},
+	lexer.OR_OR:   {precedence: 2, associativity: ltr},
+
+	lexer.EQUAL: {precedence: 1, associativity: rtl},
 }
 
 func parsePrecedenceExpression(lhs ast.Expression, minPrecedence int) ast.Expression {
@@ -252,12 +266,10 @@ func parsePrecedenceExpression(lhs ast.Expression, minPrecedence int) ast.Expres
 
 		// TODO: Clean this up. This is pretty difficult to read.
 		for lookahead.Type.IsBinaryOperator() &&
-			(operatorPrecedenceMap[lookahead.Type].associativity ==
-				associativeLeft &&
+			(operatorPrecedenceMap[lookahead.Type].associativity == ltr &&
 				operatorPrecedenceMap[lookahead.Type].precedence >
 					operatorPrecedenceMap[op.Type].precedence) ||
-			(operatorPrecedenceMap[lookahead.Type].associativity ==
-				associativeRight &&
+			(operatorPrecedenceMap[lookahead.Type].associativity == rtl &&
 				operatorPrecedenceMap[lookahead.Type].precedence ==
 					operatorPrecedenceMap[op.Type].precedence) {
 
@@ -361,7 +373,10 @@ func parseComposite() *ast.CompositeLiteral {
 func parsePrimary() ast.Expression {
 	var expr ast.Expression
 
-	if peek(0).Type == lexer.INT || peek(0).Type == lexer.FLOAT {
+	if peek(0).Type == lexer.INT ||
+		peek(0).Type == lexer.FLOAT ||
+		peek(0).Type == lexer.TRUE ||
+		peek(0).Type == lexer.FALSE {
 		current++
 		expr = &ast.Literal{
 			LiteralType:  peek(-1).Type,
@@ -377,7 +392,7 @@ func parsePrimary() ast.Expression {
 				Identifier: peek(-1),
 			}
 		}
-	} else if peek(0).Type == lexer.MINUS {
+	} else if peek(0).Type == lexer.MINUS || peek(0).Type == lexer.BANG {
 		current++
 		expr = &ast.UnaryExpression{
 			Operator: peek(-1),

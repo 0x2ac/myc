@@ -47,6 +47,10 @@ func (p *Primitive) String() string {
 	return p.Name
 }
 
+func (p *Primitive) IsNumeric() bool {
+	return p.Name == "int" || p.Name == "float"
+}
+
 func (f *FunctionType) Equals(t Type) bool {
 	if funcType, ok := t.(*FunctionType); ok {
 		if len(f.Parameters) != len(funcType.Parameters) {

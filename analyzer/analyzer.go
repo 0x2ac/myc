@@ -54,6 +54,10 @@ func (s *SymbolTable) declare(name string, initialType ast.Type) error {
 	return nil
 }
 
+func (s *SymbolTable) shadow(name string, typ ast.Type) {
+	s.values[name] = typ
+}
+
 var namespace = NewSymbolTable()
 var typespace = NewSymbolTable()
 
@@ -110,11 +114,62 @@ func analyzeExpression(expr ast.Expression) {
 		e := expr.(*ast.BinaryExpression)
 		analyzeExpression(e.Left)
 		analyzeExpression(e.Right)
+
 		if !e.Left.Type().Equals(e.Right.Type()) {
 			analysisError(e.Operator, "Binary expressions must have the same type on both sides.")
 		}
 
-		e.Typ = e.Left.Type()
+		prim, ok := e.Left.Type().(*ast.Primitive)
+		if !ok {
+			analysisError(e.Operator, fmt.Sprintf(
+				"Operator: '%s' can only be used on primitive types.",
+				e.Operator.Lexeme,
+			))
+		}
+
+		if e.Operator.Type == lexer.EQUAL {
+			e.Typ = e.Left.Type()
+		} else if e.Operator.Type == lexer.PLUS ||
+			e.Operator.Type == lexer.MINUS ||
+			e.Operator.Type == lexer.STAR ||
+			e.Operator.Type == lexer.SLASH {
+			// Arithmetic operators are only for numeric expressions
+			if !prim.IsNumeric() {
+				analysisError(e.Operator, fmt.Sprintf(
+					"Operator: '%s' can only be used on numeric primitives (e.g. `int`, `float`).",
+					e.Operator.Lexeme,
+				))
+			}
+
+			e.Typ = e.Left.Type()
+		} else if e.Operator.Type == lexer.LESSER ||
+			e.Operator.Type == lexer.GREATER ||
+			e.Operator.Type == lexer.LESSER_EQUAL ||
+			e.Operator.Type == lexer.GREATER_EQUAL {
+			// Comparison operators are also for numeric expressions
+			if !prim.IsNumeric() {
+				analysisError(e.Operator, fmt.Sprintf(
+					"Operator: '%s' can only be used on numeric primitives (e.g. `int`, `float`).",
+					e.Operator.Lexeme,
+				))
+			}
+
+			e.Typ = &ast.Primitive{Name: "bool"}
+		} else if e.Operator.Type == lexer.EQUAL_EQUAL ||
+			e.Operator.Type == lexer.BANG_EQUAL {
+			e.Typ = &ast.Primitive{Name: "bool"}
+		} else if e.Operator.Type == lexer.AND_AND || e.Operator.Type == lexer.OR_OR {
+			// Logical operators only work on `bool` expressions
+			if prim.Name != "bool" {
+				analysisError(e.Operator, fmt.Sprintf(
+					"Operator: '%s' can only be used on values of type `bool`.",
+					e.Operator.Lexeme,
+				))
+			}
+
+			e.Typ = &ast.Primitive{Name: "bool"}
+
+		}
 	case *ast.CallExpression:
 		e := expr.(*ast.CallExpression)
 		analyzeExpression(e.Callee)
@@ -317,6 +372,10 @@ func analyzeExpression(expr ast.Expression) {
 			e.Typ = &ast.Primitive{Name: "int"}
 		case lexer.FLOAT:
 			e.Typ = &ast.Primitive{Name: "float"}
+		case lexer.TRUE:
+			fallthrough
+		case lexer.FALSE:
+			e.Typ = &ast.Primitive{Name: "bool"}
 		}
 	}
 }
@@ -354,7 +413,7 @@ func analyzeStatement(statement ast.Statement) {
 		namespace = NewSymbolTableFromEnclosing(namespace)
 
 		for _, param := range s.Parameters {
-			namespace.declare(param.Identifier.Lexeme, param.Type)
+			namespace.shadow(param.Identifier.Lexeme, param.Type)
 		}
 
 		for _, statement := range s.Block.Statements {

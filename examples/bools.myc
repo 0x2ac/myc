@@ -1,0 +1,24 @@
+var b1 bool
+var b2 = 1 < 2
+var b3 = 1 > 1
+var b4 = b2 == b3
+var b5 = 23 != 45
+
+print b1
+print b2
+print b3
+print b4
+print b5
+
+fun equal(a int, b int) bool {
+    return a == b
+}
+
+var n1 = 2
+var n2 = 2
+
+print equal(n1, n2)
+
+n2 = 3
+
+print equal(n1, n2)

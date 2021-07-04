@@ -1,30 +1,40 @@
 package main
 
 import (
-	"fmt"
-
 	"github.com/kartiknair/myc/analyzer"
-	"github.com/kartiknair/myc/gen"
 	"github.com/kartiknair/myc/lexer"
 	"github.com/kartiknair/myc/parser"
 )
 
 func main() {
 	code := `
-fun inc(p *int) {
-	p^ = p^ + 1
+var a = true && false
+var b = 23 == 23 && 43 == 45
+
+print a
+print b
+
+fun equal(a int, b int) bool {
+    return a == b
 }
 
-var n = &42
-print n^
-inc(n)
-print n^
+fun test() bool {
+	return false
+}
+
+fun and(x bool, y bool) bool {
+	return x && y
+}
+
+print a && b
+print and(a, b)
+print equal(23, 42)
 `
 	tokens := lexer.Lex(code)
 	parsed := parser.Parse(tokens)
 	analyzer.Analyze(parsed)
-	gennedC := gen.C(parsed)
-	fmt.Println(gennedC)
-	gennedLLVM := gen.LLVM(parsed)
-	fmt.Println(gennedLLVM)
+	// gennedC := gen.C(parsed)
+	// fmt.Println(gennedC)
+	// gennedLLVM := gen.LLVM(parsed)
+	// fmt.Println(gennedLLVM)
 }
