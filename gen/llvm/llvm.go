@@ -202,8 +202,14 @@ func genExpression(expr ast.Expression, block *ir.Block) value.Value {
 				block.NewStore(genExpression(e.Right, block), genExpression(deref.Expression, block))
 				return block.NewLoad(genType(e.Left.Type()), genExpression(deref.Expression, block))
 			} else {
-				block.NewStore(genExpression(e.Right, block), genExpression(e.Left, block))
-				return block.NewLoad(genType(e.Left.Type()), genExpression(e.Left, block))
+				expr := genExpression(e.Left, block)
+				if load, ok := expr.(*ir.InstLoad); ok {
+					block.NewStore(genExpression(e.Right, block), load.Src)
+					return block.NewLoad(load.Type(), load.Src)
+				} else {
+					block.NewStore(genExpression(e.Right, block), expr)
+					return block.NewLoad(expr.Type(), expr)
+				}
 			}
 		case lexer.PLUS:
 			if e.Left.Type().Equals(&ast.Primitive{Name: "float"}) {
@@ -306,7 +312,6 @@ func genExpression(expr ast.Expression, block *ir.Block) value.Value {
 		}
 
 		return block.NewLoad(t, local)
-
 	case *ast.ReferenceOf:
 		e := expr.(*ast.ReferenceOf)
 		target := genExpression(e.Target, block)
