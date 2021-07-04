@@ -1,12 +1,14 @@
 package llvmgen
 
 import (
+	"fmt"
 	"strconv"
 
 	"github.com/kartiknair/myc/ast"
 	"github.com/kartiknair/myc/lexer"
 	"github.com/llir/llvm/ir"
 	"github.com/llir/llvm/ir/constant"
+	"github.com/llir/llvm/ir/enum"
 	"github.com/llir/llvm/ir/types"
 	"github.com/llir/llvm/ir/value"
 )
@@ -30,13 +32,17 @@ func genPrimitive(primitive *ast.Primitive) types.Type {
 		return types.I32
 	case "float":
 		return types.Double
+	case "bool":
+		return types.I1
 	}
 
 	panic("Invalid primitive type.")
 }
 
 var module *ir.Module
+var block *ir.Block
 var printfDeclaration *ir.Func
+var boolToStringDeclaration *ir.Func
 var namespace = make(map[string]value.Value)
 var typespace = make(map[string]types.Type)
 
@@ -47,6 +53,8 @@ func getFormatStringForType(t ast.Type) string {
 			return "%d"
 		case "float":
 			return "%f"
+		case "bool":
+			return "%s"
 		}
 	} else if _, ok := t.(*ast.StructType); ok {
 		return "%p"
@@ -55,7 +63,7 @@ func getFormatStringForType(t ast.Type) string {
 	panic("Invalid type passed to `getFormatStringForType`.")
 }
 
-func genStatement(stmt ast.Statement, block *ir.Block) {
+func genStatement(stmt ast.Statement) {
 	switch stmt.(type) {
 	case *ast.StructDeclaration:
 		s := stmt.(*ast.StructDeclaration)
@@ -105,9 +113,12 @@ func genStatement(stmt ast.Statement, block *ir.Block) {
 			namespace[param.Identifier.Lexeme] = variable
 		}
 
+		oldBlock := block
+		block = funBlock
 		for _, stmt := range s.Block.Statements {
-			genStatement(stmt, funBlock)
+			genStatement(stmt)
 		}
+		block = oldBlock
 
 		for _, param := range s.Parameters {
 			delete(namespace, param.Identifier.Lexeme)
@@ -122,14 +133,14 @@ func genStatement(stmt ast.Statement, block *ir.Block) {
 	case *ast.VariableDeclaration:
 		s := stmt.(*ast.VariableDeclaration)
 		variable := block.NewAlloca(genType(s.Type))
-		block.NewStore(genExpression(s.Value, block), variable)
+		block.NewStore(genExpression(s.Value), variable)
 		//                           ^^^^^^^
 		// TODO: Need assure that this is 0-value intialized based on the type.
 		namespace[s.Identifier.Lexeme] = variable
 	case *ast.ConstantDeclaration:
 		s := stmt.(*ast.ConstantDeclaration)
 		variable := block.NewAlloca(genType(s.Value.Type()))
-		block.NewStore(genExpression(s.Value, block), variable)
+		block.NewStore(genExpression(s.Value), variable)
 		namespace[s.Identifier.Lexeme] = variable
 	case *ast.PrintStatement:
 		s := stmt.(*ast.PrintStatement)
@@ -139,9 +150,16 @@ func genStatement(stmt ast.Statement, block *ir.Block) {
 		for i, expr := range s.Expressions {
 			formatString += getFormatStringForType(expr.Type())
 
-			e := genExpression(expr, block)
+			e := genExpression(expr)
 			if _, ok := e.Type().(*types.StructType); ok {
 				printfArgs = append(printfArgs, e.(*ir.InstLoad).Src)
+			} else if itype, ok := e.Type().(*types.IntType); ok && itype.BitSize == 1 {
+				stringed := block.NewCall(boolToStringDeclaration, e)
+				// I1 type gets extended while printing to print a clean 0 or 1.
+				//
+				// TODO: implement a simple function in LLVM to convert I1s to
+				// "true"/"false" strings and print them instead.
+				printfArgs = append(printfArgs, stringed)
 			} else {
 				printfArgs = append(printfArgs, e)
 			}
@@ -173,25 +191,25 @@ func genStatement(stmt ast.Statement, block *ir.Block) {
 		)
 	case *ast.ReturnStatement:
 		s := stmt.(*ast.ReturnStatement)
-		block.NewRet(genExpression(s.Expression, block))
+		block.NewRet(genExpression(s.Expression))
 	case *ast.ExpressionStatement:
 		s := stmt.(*ast.ExpressionStatement)
-		genExpression(s.Expression, block)
+		genExpression(s.Expression)
 	case *ast.BlockStatement:
 		s := stmt.(*ast.BlockStatement)
 		for _, stmt := range s.Statements {
-			genStatement(stmt, block)
+			genStatement(stmt)
 		}
 	}
 }
 
-func genExpression(expr ast.Expression, block *ir.Block) value.Value {
+func genExpression(expr ast.Expression) value.Value {
 	switch expr.(type) {
 	case *ast.UnaryExpression:
 		e := expr.(*ast.UnaryExpression)
 		switch e.Operator.Type {
 		case lexer.MINUS:
-			return block.NewSub(constant.NewInt(types.I32, 0), genExpression(e.Value, block))
+			return block.NewSub(constant.NewInt(types.I32, 0), genExpression(e.Value))
 		}
 	case *ast.BinaryExpression:
 		e := expr.(*ast.BinaryExpression)
@@ -199,44 +217,95 @@ func genExpression(expr ast.Expression, block *ir.Block) value.Value {
 		case lexer.EQUAL:
 			// If assigning to a dereference we generate it's nested expression instead.
 			if deref, ok := e.Left.(*ast.Dereference); ok {
-				block.NewStore(genExpression(e.Right, block), genExpression(deref.Expression, block))
-				return block.NewLoad(genType(e.Left.Type()), genExpression(deref.Expression, block))
+				block.NewStore(genExpression(e.Right), genExpression(deref.Expression))
+				return block.NewLoad(genType(e.Left.Type()), genExpression(deref.Expression))
 			} else {
-				expr := genExpression(e.Left, block)
+				expr := genExpression(e.Left)
 				if load, ok := expr.(*ir.InstLoad); ok {
-					block.NewStore(genExpression(e.Right, block), load.Src)
+					block.NewStore(genExpression(e.Right), load.Src)
 					return block.NewLoad(load.Type(), load.Src)
 				} else {
-					block.NewStore(genExpression(e.Right, block), expr)
+					block.NewStore(genExpression(e.Right), expr)
 					return block.NewLoad(expr.Type(), expr)
 				}
 			}
 		case lexer.PLUS:
 			if e.Left.Type().Equals(&ast.Primitive{Name: "float"}) {
-				return block.NewFAdd(genExpression(e.Left, block), genExpression(e.Right, block))
+				return block.NewFAdd(genExpression(e.Left), genExpression(e.Right))
 			}
-			return block.NewAdd(genExpression(e.Left, block), genExpression(e.Right, block))
+			return block.NewAdd(genExpression(e.Left), genExpression(e.Right))
 		case lexer.MINUS:
 			if e.Left.Type().Equals(&ast.Primitive{Name: "float"}) {
-				return block.NewFSub(genExpression(e.Left, block), genExpression(e.Right, block))
+				return block.NewFSub(genExpression(e.Left), genExpression(e.Right))
 			}
-			return block.NewSub(genExpression(e.Left, block), genExpression(e.Right, block))
+			return block.NewSub(genExpression(e.Left), genExpression(e.Right))
 		case lexer.STAR:
 			if e.Left.Type().Equals(&ast.Primitive{Name: "float"}) {
-				return block.NewFMul(genExpression(e.Left, block), genExpression(e.Right, block))
+				return block.NewFMul(genExpression(e.Left), genExpression(e.Right))
 			}
-			return block.NewMul(genExpression(e.Left, block), genExpression(e.Right, block))
+			return block.NewMul(genExpression(e.Left), genExpression(e.Right))
 		case lexer.SLASH:
 			if e.Left.Type().Equals(&ast.Primitive{Name: "float"}) {
-				return block.NewFDiv(genExpression(e.Left, block), genExpression(e.Right, block))
+				return block.NewFDiv(genExpression(e.Left), genExpression(e.Right))
 			}
-			return block.NewSDiv(genExpression(e.Left, block), genExpression(e.Right, block))
+			return block.NewSDiv(genExpression(e.Left), genExpression(e.Right))
+		case lexer.LESSER:
+			if e.Left.Type().Equals(&ast.Primitive{Name: "float"}) {
+				return block.NewFCmp(enum.FPredOLT, genExpression(e.Left), genExpression(e.Right))
+			}
+			return block.NewICmp(enum.IPredSLT, genExpression(e.Left), genExpression(e.Right))
+		case lexer.GREATER:
+			if e.Left.Type().Equals(&ast.Primitive{Name: "float"}) {
+				return block.NewFCmp(enum.FPredOGT, genExpression(e.Left), genExpression(e.Right))
+			}
+			return block.NewICmp(enum.IPredSGT, genExpression(e.Left), genExpression(e.Right))
+		case lexer.LESSER_EQUAL:
+			if e.Left.Type().Equals(&ast.Primitive{Name: "float"}) {
+				return block.NewFCmp(enum.FPredOLE, genExpression(e.Left), genExpression(e.Right))
+			}
+			return block.NewICmp(enum.IPredSLE, genExpression(e.Left), genExpression(e.Right))
+		case lexer.GREATER_EQUAL:
+			if e.Left.Type().Equals(&ast.Primitive{Name: "float"}) {
+				return block.NewFCmp(enum.FPredOGE, genExpression(e.Left), genExpression(e.Right))
+			}
+			return block.NewICmp(enum.IPredSGE, genExpression(e.Left), genExpression(e.Right))
+		case lexer.EQUAL_EQUAL:
+			if e.Left.Type().Equals(&ast.Primitive{Name: "float"}) {
+				return block.NewFCmp(enum.FPredOEQ, genExpression(e.Left), genExpression(e.Right))
+			}
+			// ICmp works for both `int` and `bool`
+			return block.NewICmp(enum.IPredEQ, genExpression(e.Left), genExpression(e.Right))
+		case lexer.BANG_EQUAL:
+			if e.Left.Type().Equals(&ast.Primitive{Name: "float"}) {
+				return block.NewFCmp(enum.FPredONE, genExpression(e.Left), genExpression(e.Right))
+			}
+			return block.NewICmp(enum.IPredNE, genExpression(e.Left), genExpression(e.Right))
+		case lexer.AND_AND:
+			oldBlock := block
+
+			left := genExpression(e.Left)
+			ifLeftTrueBlock := block.Parent.NewBlock("")
+			otherwiseBlock := block.Parent.NewBlock("")
+
+			block.NewCondBr(left, ifLeftTrueBlock, otherwiseBlock)
+
+			block = ifLeftTrueBlock
+			right := genExpression(e.Right)
+			ifLeftTrueBlock.NewBr(otherwiseBlock)
+
+			block = otherwiseBlock
+			return block.NewPhi(ir.NewIncoming(constant.False, oldBlock), ir.NewIncoming(right, ifLeftTrueBlock))
+		case lexer.OR_OR:
+			left := genExpression(e.Left)
+			right := genExpression(e.Right)
+			return block.NewOr(left, right)
 		}
+
 	case *ast.CallExpression:
 		e := expr.(*ast.CallExpression)
 		args := []value.Value{}
 		for _, arg := range e.Arguments {
-			args = append(args, genExpression(arg, block))
+			args = append(args, genExpression(arg))
 		}
 
 		var callee value.Value
@@ -262,7 +331,7 @@ func genExpression(expr ast.Expression, block *ir.Block) value.Value {
 			}
 		}
 
-		expr := genExpression(e.Expression, block)
+		expr := genExpression(e.Expression)
 		var gep *ir.InstGetElementPtr
 
 		if loadInst, ok := expr.(*ir.InstLoad); ok {
@@ -297,7 +366,7 @@ func genExpression(expr ast.Expression, block *ir.Block) value.Value {
 					constant.NewInt(types.I32, int64(0)),
 					constant.NewInt(types.I32, int64(i)),
 				)
-				block.NewStore(genExpression(initializer.Value, block), tmp)
+				block.NewStore(genExpression(initializer.Value), tmp)
 			}
 		} else {
 			for i, initializer := range *e.UnnamedInitializers {
@@ -307,14 +376,14 @@ func genExpression(expr ast.Expression, block *ir.Block) value.Value {
 					constant.NewInt(types.I32, int64(0)),
 					constant.NewInt(types.I32, int64(i)),
 				)
-				block.NewStore(genExpression(initializer, block), tmp)
+				block.NewStore(genExpression(initializer), tmp)
 			}
 		}
 
 		return block.NewLoad(t, local)
 	case *ast.ReferenceOf:
 		e := expr.(*ast.ReferenceOf)
-		target := genExpression(e.Target, block)
+		target := genExpression(e.Target)
 
 		if loadInst, ok := target.(*ir.InstLoad); ok {
 			return loadInst.Src
@@ -323,7 +392,7 @@ func genExpression(expr ast.Expression, block *ir.Block) value.Value {
 		}
 	case *ast.Dereference:
 		e := expr.(*ast.Dereference)
-		return block.NewLoad(genType(e.Type()), genExpression(e.Expression, block))
+		return block.NewLoad(genType(e.Type()), genExpression(e.Expression))
 	case *ast.Literal:
 		e := expr.(*ast.Literal)
 		switch e.LiteralType {
@@ -337,10 +406,18 @@ func genExpression(expr ast.Expression, block *ir.Block) value.Value {
 			tmp := block.NewAlloca(types.Double)
 			block.NewStore(constant.NewFloat(types.Double, parsedFloat), tmp)
 			return block.NewLoad(types.Double, tmp)
+		case lexer.TRUE:
+			tmp := block.NewAlloca(types.I1)
+			block.NewStore(constant.NewInt(types.I1, 1), tmp)
+			return block.NewLoad(types.I1, tmp)
+		case lexer.FALSE:
+			tmp := block.NewAlloca(types.I1)
+			block.NewStore(constant.NewInt(types.I1, 0), tmp)
+			return block.NewLoad(types.I1, tmp)
 		}
 	}
 
-	panic("Expression node has invalid static type.")
+	panic(fmt.Sprintf("Expression node has invalid static type. %T", expr))
 }
 
 func Gen(statements []ast.Statement) string {
@@ -349,14 +426,40 @@ func Gen(statements []ast.Statement) string {
 	printfDeclaration = module.NewFunc("printf", types.I32, ir.NewParam("format", types.I8Ptr))
 	printfDeclaration.Sig.Variadic = true
 
+	boolToStringParam := ir.NewParam("b", types.I1)
+	boolToStringDeclaration = module.NewFunc("boolToString", types.I8Ptr, boolToStringParam)
+	boolToStringEntryBlock := boolToStringDeclaration.NewBlock("entry")
+	boolToStringTrueBlock := boolToStringDeclaration.NewBlock("iftrue")
+	boolToStringFalseBlock := boolToStringDeclaration.NewBlock("iffalse")
+	boolToStringEntryBlock.NewCondBr(boolToStringParam, boolToStringTrueBlock, boolToStringFalseBlock)
+
+	trueStringDef := module.NewGlobalDef("", constant.NewCharArrayFromString("true\x00"))
+	falseStringDef := module.NewGlobalDef("", constant.NewCharArrayFromString("false\x00"))
+
+	boolToStringTrueBlock.NewRet(constant.NewGetElementPtr(
+		types.NewArray(uint64(5), types.I8),
+		trueStringDef,
+		constant.NewInt(types.I32, 0),
+		constant.NewInt(types.I32, 0),
+	))
+
+	boolToStringFalseBlock.NewRet(constant.NewGetElementPtr(
+		types.NewArray(uint64(6), types.I8),
+		falseStringDef,
+		constant.NewInt(types.I32, 0),
+		constant.NewInt(types.I32, 0),
+	))
+
 	cmain := module.NewFunc("main", types.I32)
-	cmainBlock := cmain.NewBlock("main_block")
+	block = cmain.NewBlock("main_block")
 
 	for _, statement := range statements {
-		genStatement(statement, cmainBlock)
+		genStatement(statement)
 	}
 
-	cmainBlock.NewRet(constant.NewInt(types.I32, 0))
+	if block.Term == nil {
+		block.NewRet(constant.NewInt(types.I32, 0))
+	}
 
 	return module.String()
 }

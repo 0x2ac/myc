@@ -1,4 +1,4 @@
-var b1 bool
+var b1 = false
 var b2 = 1 < 2
 var b3 = 1 > 1
 var b4 = b2 == b3

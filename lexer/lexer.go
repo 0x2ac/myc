@@ -238,7 +238,11 @@ func ScanToken() {
 			lexError(line, "Expected token: `|` after `|`.")
 		}
 	case '!':
-		addToken(BANG, "")
+		if match('=') {
+			addToken(BANG_EQUAL, "")
+		} else {
+			addToken(BANG, "")
+		}
 	case '<':
 		if match('=') {
 			addToken(LESSER_EQUAL, "")
