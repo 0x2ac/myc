@@ -142,6 +142,44 @@ func genStatement(stmt ast.Statement) {
 		variable := block.NewAlloca(genType(s.Value.Type()))
 		block.NewStore(genExpression(s.Value), variable)
 		namespace[s.Identifier.Lexeme] = variable
+	case *ast.IfStatement:
+		s := stmt.(*ast.IfStatement)
+
+		condition := genExpression(s.Condition)
+		iftrueBlock := block.Parent.NewBlock("")
+		iffalseBlock := block.Parent.NewBlock("")
+		afterBlock := block.Parent.NewBlock("")
+		block.NewCondBr(condition, iftrueBlock, iffalseBlock)
+
+		block = iftrueBlock
+		genStatement(&s.IfBlock)
+		if block.Term == nil {
+			block.NewBr(afterBlock)
+		}
+
+		block = iffalseBlock
+		if s.ElseBlock != nil {
+			genStatement(s.ElseBlock)
+		}
+		if block.Term == nil {
+			block.NewBr(afterBlock)
+		}
+
+		block = afterBlock
+	case *ast.WhileStatement:
+		s := stmt.(*ast.WhileStatement)
+
+		condition := genExpression(s.Condition)
+		loopBlock := block.Parent.NewBlock("")
+		afterBlock := block.Parent.NewBlock("")
+		block.NewCondBr(condition, loopBlock, afterBlock)
+
+		block = loopBlock
+		genStatement(&s.Block)
+		conditionAgain := genExpression(s.Condition)
+		block.NewCondBr(conditionAgain, loopBlock, afterBlock)
+
+		block = afterBlock
 	case *ast.PrintStatement:
 		s := stmt.(*ast.PrintStatement)
 

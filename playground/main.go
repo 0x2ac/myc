@@ -1,7 +1,10 @@
 package main
 
 import (
+	"fmt"
+
 	"github.com/kartiknair/myc/analyzer"
+	"github.com/kartiknair/myc/gen"
 	"github.com/kartiknair/myc/lexer"
 	"github.com/kartiknair/myc/parser"
 )
@@ -29,6 +32,6 @@ while n1 > 0 {
 	analyzer.Analyze(parsed)
 	// gennedC := gen.C(parsed)
 	// fmt.Println(gennedC)
-	// gennedLLVM := gen.LLVM(parsed)
-	// fmt.Println(gennedLLVM)
+	gennedLLVM := gen.LLVM(parsed)
+	fmt.Println(gennedLLVM)
 }

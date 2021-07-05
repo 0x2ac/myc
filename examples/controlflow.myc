@@ -1,5 +1,5 @@
-var n1 = 24
-var n2 = 32
+var n1 = 4
+var n2 = 2
 
 if n1 < 20 && n2 < 20 {
     print n1, n2
@@ -10,6 +10,6 @@ if n1 < 20 && n2 < 20 {
 }
 
 while n1 > 0 {
-    print n
+    print n1
     n1 = n1 - 1
 }
