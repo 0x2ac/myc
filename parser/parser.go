@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/alecthomas/repr"
 	"github.com/kartiknair/myc/ast"
 	"github.com/kartiknair/myc/lexer"
 )
@@ -141,7 +142,7 @@ func parseStatement() ast.Statement {
 
 		if peek(0).Type == lexer.EQUAL {
 			current++
-			expr = parseExpression()
+			expr = parseExpression(false)
 		}
 
 		expect(lexer.SEMICOLON, "Expect `;` after variable declaration.")
@@ -154,17 +155,71 @@ func parseStatement() ast.Statement {
 		// ConstantDeclaration
 		current++
 		name := expect(lexer.IDENTIFIER, "Expect identifier after `const`.")
-		expr := parseExpression()
+		expr := parseExpression(false)
 		return &ast.ConstantDeclaration{
 			Identifier: name,
 			Value:      expr,
+		}
+	} else if t.Type == lexer.IF {
+		// IfStatement
+		current++
+		condition := parseExpression(true)
+		expect(lexer.LEFT_BRACE, "Expect block after if condition.")
+		current--
+		ifBlock := parseBlock()
+		elifStmts := []ast.ElseIfStatement{}
+
+		hasElseBlock := false
+		var elseBlock *ast.BlockStatement
+		for peek(0).Type == lexer.ELSE {
+			current++
+			if peek(0).Type == lexer.IF {
+				elifToken := peek(0)
+				current++
+				elifCond := parseExpression(true)
+				elifBlock := parseBlock()
+				elifStmts = append(elifStmts, ast.ElseIfStatement{
+					IfToken:   elifToken,
+					Condition: elifCond,
+					Block:     *elifBlock,
+				})
+			} else {
+				hasElseBlock = true
+				break
+			}
+		}
+
+		if hasElseBlock {
+			expect(lexer.LEFT_BRACE, "Expect block after else.")
+			current--
+			elseBlock = parseBlock()
+		}
+
+		return &ast.IfStatement{
+			IfToken:          t,
+			Condition:        condition,
+			IfBlock:          *ifBlock,
+			ElseIfStatements: elifStmts,
+			ElseBlock:        elseBlock,
+		}
+	} else if t.Type == lexer.WHILE {
+		// WhileStatement
+		current++
+		condition := parseExpression(true)
+		expect(lexer.LEFT_BRACE, "Expect block after while condition.")
+		current--
+		block := parseBlock()
+		return &ast.WhileStatement{
+			WhileToken: t,
+			Condition:  condition,
+			Block:      *block,
 		}
 	} else if t.Type == lexer.RETURN {
 		// ReturnStatement
 		current++
 		var expr ast.Expression
 		if peek(0).Type != lexer.SEMICOLON {
-			expr = parseExpression()
+			expr = parseExpression(false)
 		}
 		expect(lexer.SEMICOLON, "Expect semicolon after return statement.")
 		return &ast.ReturnStatement{
@@ -175,11 +230,11 @@ func parseStatement() ast.Statement {
 		// PrintStatement
 		current++
 		exprs := []ast.Expression{}
-		first := parseExpression()
+		first := parseExpression(false)
 		exprs = append(exprs, first)
 		for peek(0).Type == lexer.COMMA {
 			current++
-			exprs = append(exprs, parseExpression())
+			exprs = append(exprs, parseExpression(false))
 		}
 		expect(lexer.SEMICOLON, "Expect semicolon after print statement.")
 		return &ast.PrintStatement{
@@ -190,7 +245,7 @@ func parseStatement() ast.Statement {
 		return parseBlock()
 	}
 
-	expr := parseExpression()
+	expr := parseExpression(false)
 	expect(lexer.SEMICOLON, "Expect semicolon after top-level expression.")
 	// ExpressionStatement
 	return &ast.ExpressionStatement{
@@ -216,8 +271,8 @@ func parseBlock() *ast.BlockStatement {
 	}
 }
 
-func parseExpression() ast.Expression {
-	return parsePrecedenceExpression(parsePrimary(), 0)
+func parseExpression(expectingBlock bool) ast.Expression {
+	return parsePrecedenceExpression(parsePrimary(expectingBlock), 0, expectingBlock)
 }
 
 type associativity int
@@ -254,14 +309,14 @@ var operatorPrecedenceMap = map[lexer.TokenType]opInfo{
 	lexer.EQUAL: {precedence: 1, associativity: rtl},
 }
 
-func parsePrecedenceExpression(lhs ast.Expression, minPrecedence int) ast.Expression {
+func parsePrecedenceExpression(lhs ast.Expression, minPrecedence int, expectingBlock bool) ast.Expression {
 	lookahead := peek(0)
 	for lookahead.Type.IsBinaryOperator() &&
 		operatorPrecedenceMap[lookahead.Type].precedence >= minPrecedence {
 
 		op := lookahead
 		current++
-		rhs := parsePrimary()
+		rhs := parsePrimary(expectingBlock)
 		lookahead = peek(0)
 
 		// TODO: Clean this up. This is pretty difficult to read.
@@ -273,7 +328,7 @@ func parsePrecedenceExpression(lhs ast.Expression, minPrecedence int) ast.Expres
 				operatorPrecedenceMap[lookahead.Type].precedence ==
 					operatorPrecedenceMap[op.Type].precedence) {
 
-			rhs = parsePrecedenceExpression(rhs, minPrecedence+1)
+			rhs = parsePrecedenceExpression(rhs, minPrecedence+1, expectingBlock)
 			lookahead = peek(0)
 		}
 
@@ -309,7 +364,7 @@ func parseComposite() *ast.CompositeLiteral {
 
 			name := peek(-1)
 			current++ // skip the ':'
-			expr := parseExpression()
+			expr := parseExpression(false)
 
 			namedInitializers = append(namedInitializers, ast.NamedInitializer{
 				Identifier: name,
@@ -324,7 +379,7 @@ func parseComposite() *ast.CompositeLiteral {
 		}
 	} else {
 		usingNamedInitializers = false
-		expr := parseExpression()
+		expr := parseExpression(false)
 		unnamedInitializers = append(unnamedInitializers, expr)
 	}
 
@@ -336,13 +391,13 @@ func parseComposite() *ast.CompositeLiteral {
 		} else if usingNamedInitializers {
 			name := expect(lexer.IDENTIFIER, "Expect identifier for initializer in composite literal.")
 			expect(lexer.COLON, "Expect `:` in composite literal initializer.")
-			expr := parseExpression()
+			expr := parseExpression(false)
 			namedInitializers = append(namedInitializers, ast.NamedInitializer{
 				Identifier: name,
 				Value:      expr,
 			})
 		} else {
-			expr := parseExpression()
+			expr := parseExpression(false)
 			unnamedInitializers = append(unnamedInitializers, expr)
 		}
 	}
@@ -370,7 +425,7 @@ func parseComposite() *ast.CompositeLiteral {
 	}
 }
 
-func parsePrimary() ast.Expression {
+func parsePrimary(expectingBlock bool) ast.Expression {
 	var expr ast.Expression
 
 	if peek(0).Type == lexer.INT ||
@@ -384,7 +439,12 @@ func parsePrimary() ast.Expression {
 		}
 	} else if peek(0).Type == lexer.IDENTIFIER {
 		current++
-		if peek(0).Type == lexer.LEFT_BRACE {
+		if peek(0).Type == lexer.LEFT_BRACE && !expectingBlock {
+			//                                 ---------------
+			// Since parsing a composite literal can be ambiguous between keywords and blocks
+			// e.g. between the `if`/`while` keyword and block.
+			//
+			// The Go specification mentions this in https://golang.org/ref/spec#Composite_literals
 			current--
 			expr = parseComposite()
 		} else {
@@ -396,12 +456,12 @@ func parsePrimary() ast.Expression {
 		current++
 		expr = &ast.UnaryExpression{
 			Operator: peek(-1),
-			Value:    parsePrimary(),
+			Value:    parsePrimary(false),
 		}
 	} else if peek(0).Type == lexer.AND {
 		current++
 		expr = &ast.ReferenceOf{
-			Target: parsePrimary(),
+			Target: parsePrimary(false),
 		}
 	}
 
@@ -414,7 +474,7 @@ func parsePrimary() ast.Expression {
 
 			if peek(0).Type != lexer.RIGHT_PAREN {
 				for {
-					arguments = append(arguments, parseExpression())
+					arguments = append(arguments, parseExpression(false))
 
 					if peek(0).Type != lexer.COMMA {
 						break
@@ -451,6 +511,7 @@ func parsePrimary() ast.Expression {
 	}
 
 	if expr == nil {
+		repr.Println(peek(0))
 		parseError(peek(0), "Expected expression.")
 	}
 

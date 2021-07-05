@@ -15,6 +15,9 @@ var Keywords = [...]string{
 	"struct",
 	"true",
 	"false",
+	"if",
+	"else",
+	"while",
 }
 
 type Pos struct {
@@ -40,6 +43,9 @@ const (
 	STRUCT
 	TRUE
 	FALSE
+	IF
+	ELSE
+	WHILE
 	keyword_end
 
 	LEFT_PAREN

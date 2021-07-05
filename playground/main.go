@@ -8,27 +8,21 @@ import (
 
 func main() {
 	code := `
-var a = true && false
-var b = 23 == 23 && 43 == 45
+var n1 = 24
+var n2 = 32
 
-print a
-print b
-
-fun equal(a int, b int) bool {
-    return a == b
+if n1 < 20 && n2 < 20 {
+	print n1, n2
+} else if n1 < 20 {
+	print n1
+} else {
+	print n2
 }
 
-fun test() bool {
-	return false
+while n1 > 0 {
+	print n1
+	n1 = n1 - 1
 }
-
-fun and(x bool, y bool) bool {
-	return x && y
-}
-
-print a && b
-print and(a, b)
-print equal(23, 42)
 `
 	tokens := lexer.Lex(code)
 	parsed := parser.Parse(tokens)

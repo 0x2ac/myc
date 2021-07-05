@@ -162,6 +162,29 @@ type ConstantDeclaration struct {
 	Value      Expression
 }
 
+type IfStatement struct {
+	Condition        Expression
+	IfBlock          BlockStatement
+	ElseIfStatements []ElseIfStatement
+	ElseBlock        *BlockStatement
+
+	IfToken lexer.Token
+}
+
+type ElseIfStatement struct {
+	Condition Expression
+	Block     BlockStatement
+
+	IfToken lexer.Token
+}
+
+type WhileStatement struct {
+	Condition Expression
+	Block     BlockStatement
+
+	WhileToken lexer.Token
+}
+
 type PrintStatement struct {
 	Expressions []Expression
 }
@@ -184,6 +207,8 @@ func (*FunctionDeclaration) isStatement() {}
 func (*StructDeclaration) isStatement()   {}
 func (*VariableDeclaration) isStatement() {}
 func (*ConstantDeclaration) isStatement() {}
+func (*IfStatement) isStatement()         {}
+func (*WhileStatement) isStatement()      {}
 func (*PrintStatement) isStatement()      {}
 func (*ReturnStatement) isStatement()     {}
 func (*ExpressionStatement) isStatement() {}

@@ -484,6 +484,52 @@ func analyzeStatement(statement ast.Statement) {
 		if err != nil {
 			analysisError(s.Identifier, err.Error())
 		}
+	case *ast.IfStatement:
+		s := statement.(*ast.IfStatement)
+		analyzeExpression(s.Condition)
+		if p, ok := s.Condition.Type().(*ast.Primitive); !ok || p.Name != "bool" {
+			analysisError(
+				s.IfToken,
+				fmt.Sprintf(
+					"If statement's condition must be of type: `bool`. Got expression of type: '%s' instead.",
+					s.Condition.Type().String(),
+				),
+			)
+		}
+		analyzeStatement(&s.IfBlock)
+
+		if len(s.ElseIfStatements) != 0 {
+			for _, e := range s.ElseIfStatements {
+				analyzeExpression(e.Condition)
+				if p, ok := e.Condition.Type().(*ast.Primitive); !ok || p.Name != "bool" {
+					analysisError(
+						e.IfToken,
+						fmt.Sprintf(
+							"Else if statement's condition must be of type: `bool`. Got expression of type: '%s' instead.",
+							e.Condition.Type().String(),
+						),
+					)
+				}
+				analyzeStatement(&e.Block)
+			}
+		}
+
+		if s.ElseBlock != nil {
+			analyzeStatement(s.ElseBlock)
+		}
+	case *ast.WhileStatement:
+		s := statement.(*ast.WhileStatement)
+		analyzeExpression(s.Condition)
+		if p, ok := s.Condition.Type().(*ast.Primitive); !ok || p.Name != "bool" {
+			analysisError(
+				s.WhileToken,
+				fmt.Sprintf(
+					"While statement's condition must be of type: `bool`. Got expression of type: '%s' instead.",
+					s.Condition.Type().String(),
+				),
+			)
+		}
+		analyzeStatement(&s.Block)
 	case *ast.PrintStatement:
 		s := statement.(*ast.PrintStatement)
 		for _, expr := range s.Expressions {
