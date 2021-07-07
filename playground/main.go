@@ -11,23 +11,22 @@ import (
 
 func main() {
 	code := `
-var n1 = 24
-var n2 = 32
+var s1 = [1, 2, 3]
+var s2 = [1.34, 2.1, 3.12]
 
-if n1 < 20 && n2 < 20 {
-	print n1, n2
-} else if n1 < 20 {
-	print n1
-} else {
-	print n2
-}
+print s1
+print s2
 
-while n1 > 0 {
-	print n1
-	n1 = n1 - 1
-}
+print s1[0]
+print s1[2]
+print s2[0]
+print s2[2]
+
+print s1[-1]
+print s2[5]	
 `
 	tokens := lexer.Lex(code)
+	// repr.Println(tokens)
 	parsed := parser.Parse(tokens)
 	analyzer.Analyze(parsed)
 	// gennedC := gen.C(parsed)

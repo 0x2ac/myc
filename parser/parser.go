@@ -430,12 +430,36 @@ func parsePrimary(expectingBlock bool) ast.Expression {
 
 	if peek(0).Type == lexer.INT ||
 		peek(0).Type == lexer.FLOAT ||
+		peek(0).Type == lexer.STRING ||
 		peek(0).Type == lexer.TRUE ||
 		peek(0).Type == lexer.FALSE {
 		current++
 		expr = &ast.Literal{
 			LiteralType:  peek(-1).Type,
 			LiteralValue: peek(-1).Lexeme,
+		}
+	} else if peek(0).Type == lexer.LEFT_BRACKET {
+		lbtoken := peek(0)
+		current++
+		expressions := []ast.Expression{}
+
+		if peek(0).Type != lexer.RIGHT_BRACKET {
+			for {
+				expressions = append(expressions, parseExpression(false))
+
+				if peek(0).Type != lexer.COMMA {
+					break
+				} else {
+					current++ // skip the comma
+				}
+			}
+		}
+
+		expect(lexer.RIGHT_BRACKET, "Expect closing bracket in slice literal.")
+
+		expr = &ast.SliceLiteral{
+			Expressions:      expressions,
+			LeftBracketToken: lbtoken,
 		}
 	} else if peek(0).Type == lexer.IDENTIFIER {
 		current++
@@ -465,7 +489,11 @@ func parsePrimary(expectingBlock bool) ast.Expression {
 		}
 	}
 
-	for peek(0).Type == lexer.LEFT_PAREN || peek(0).Type == lexer.DOT || peek(0).Type == lexer.CARET {
+	for peek(0).Type == lexer.LEFT_PAREN ||
+		peek(0).Type == lexer.LEFT_BRACKET ||
+		peek(0).Type == lexer.DOT ||
+		peek(0).Type == lexer.CARET {
+
 		if peek(0).Type == lexer.LEFT_PAREN {
 			leftParenToken := peek(0)
 
@@ -489,6 +517,19 @@ func parsePrimary(expectingBlock bool) ast.Expression {
 				Callee:         expr,
 				Arguments:      arguments,
 				LeftParenToken: leftParenToken,
+			}
+		}
+
+		if peek(0).Type == lexer.LEFT_BRACKET {
+			leftBracketToken := peek(0)
+			current++
+			index := parseExpression(false)
+
+			expect(lexer.RIGHT_BRACKET, "Missing close bracket in index expression.")
+			expr = &ast.IndexExpression{
+				Expression:       expr,
+				Index:            index,
+				LeftBracketToken: leftBracketToken,
 			}
 		}
 
@@ -536,6 +577,13 @@ func parseType() ast.Type {
 		current++
 		return &ast.PointerType{
 			ElType: parseType(),
+		}
+	} else if peek(0).Type == lexer.LEFT_BRACKET {
+		current++
+		typ := parseType()
+		expect(lexer.RIGHT_BRACKET, "Expect closing bracket in slice type.")
+		return &ast.SliceType{
+			ElType: typ,
 		}
 	}
 

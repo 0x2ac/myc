@@ -257,6 +257,33 @@ func analyzeExpression(expr ast.Expression) {
 		}
 
 		e.Typ = foundMember.Type
+	case *ast.IndexExpression:
+		e := expr.(*ast.IndexExpression)
+		analyzeExpression(e.Expression)
+		analyzeExpression(e.Index)
+
+		st, exprIsSlice := e.Expression.Type().(*ast.SliceType)
+		prim, indexIsPrimitive := e.Index.Type().(*ast.Primitive)
+
+		if !exprIsSlice {
+			analysisError(
+				e.LeftBracketToken,
+				fmt.Sprintf(
+					"Index operation can only be done on slice type values. Received value of type: '%s' instead",
+					e.Expression.Type().String(),
+				),
+			)
+		} else if !indexIsPrimitive || prim.Name != "int" {
+			analysisError(
+				e.LeftBracketToken,
+				fmt.Sprintf(
+					"Index can only of type `int`. Attempting to index with value of type: '%s' instead",
+					e.Index.Type().String(),
+				),
+			)
+		}
+
+		e.Typ = st.ElType
 	case *ast.CompositeLiteral:
 		e := expr.(*ast.CompositeLiteral)
 		r := e.Typ.(*ast.StructType)
@@ -345,6 +372,24 @@ func analyzeExpression(expr ast.Expression) {
 		}
 
 		e.Typ = r
+	case *ast.SliceLiteral:
+		e := expr.(*ast.SliceLiteral)
+
+		var elType ast.Type
+		for _, initializer := range e.Expressions {
+			analyzeExpression(initializer)
+			if elType == nil {
+				elType = initializer.Type()
+			} else if !elType.Equals(initializer.Type()) {
+				analysisError(e.LeftBracketToken, fmt.Sprintf(
+					"Mixing types within slice literal. Expected elements of type: '%s', got '%s' instead.",
+					elType.String(),
+					initializer.Type().String(),
+				))
+			}
+		}
+
+		e.Typ = &ast.SliceType{ElType: elType}
 	case *ast.ReferenceOf:
 		e := expr.(*ast.ReferenceOf)
 		analyzeExpression(e.Target)

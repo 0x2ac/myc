@@ -1,0 +1,10 @@
+var s1 = "some string"
+var s2 = "some other string"
+var s3 = s1 + " " + s2
+
+var s5 = "s1: '#{s1}', s2: '#{s2}'"
+
+var n1 = 23
+var n2 = 34.56
+
+print "n1: #{n1}, n2: #{n2}"

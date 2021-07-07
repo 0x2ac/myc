@@ -17,6 +17,14 @@ func genType(t ast.Type) types.Type {
 	switch t.(type) {
 	case *ast.Primitive:
 		return genPrimitive(t.(*ast.Primitive))
+	case *ast.SliceType:
+		st := t.(*ast.SliceType)
+		// struct {
+		//     buffer   *ElType
+		//     length   i64
+		//     capacity i64
+		// }
+		return types.NewStruct(types.NewPointer(genType(st.ElType)), types.I64, types.I64)
 	case *ast.StructType:
 		return typespace[t.(*ast.StructType).Name]
 	case *ast.PointerType:
@@ -39,12 +47,17 @@ func genPrimitive(primitive *ast.Primitive) types.Type {
 	panic("Invalid primitive type.")
 }
 
-var module *ir.Module
-var block *ir.Block
-var printfDeclaration *ir.Func
-var boolToStringDeclaration *ir.Func
-var namespace = make(map[string]value.Value)
-var typespace = make(map[string]types.Type)
+var (
+	module *ir.Module
+	block  *ir.Block
+
+	panicDeclaration        *ir.Func
+	printfDeclaration       *ir.Func
+	boolToStringDeclaration *ir.Func
+
+	namespace = make(map[string]value.Value)
+	typespace = make(map[string]types.Type)
+)
 
 func getFormatStringForType(t ast.Type) string {
 	if primitive, ok := t.(*ast.Primitive); ok {
@@ -57,6 +70,8 @@ func getFormatStringForType(t ast.Type) string {
 			return "%s"
 		}
 	} else if _, ok := t.(*ast.StructType); ok {
+		return "%p"
+	} else if _, ok := t.(*ast.SliceType); ok {
 		return "%p"
 	}
 
@@ -193,10 +208,6 @@ func genStatement(stmt ast.Statement) {
 				printfArgs = append(printfArgs, e.(*ir.InstLoad).Src)
 			} else if itype, ok := e.Type().(*types.IntType); ok && itype.BitSize == 1 {
 				stringed := block.NewCall(boolToStringDeclaration, e)
-				// I1 type gets extended while printing to print a clean 0 or 1.
-				//
-				// TODO: implement a simple function in LLVM to convert I1s to
-				// "true"/"false" strings and print them instead.
 				printfArgs = append(printfArgs, stringed)
 			} else {
 				printfArgs = append(printfArgs, e)
@@ -380,15 +391,71 @@ func genExpression(expr ast.Expression) value.Value {
 				constant.NewInt(types.I32, int64(memberIndex)),
 			)
 		} else {
-			gep = block.NewGetElementPtr(
-				typespace[st.Name],
-				expr,
-				constant.NewInt(types.I32, int64(0)),
-				constant.NewInt(types.I32, int64(memberIndex)),
-			)
+			panic("internal error: get expression on non-load instruction.")
 		}
 
 		return block.NewLoad(genType(st.Members[memberIndex].Type), gep)
+	case *ast.IndexExpression:
+		e := expr.(*ast.IndexExpression)
+		target := genExpression(e.Expression)
+		index := genExpression(e.Index)
+
+		if index.Type().(*types.IntType).BitSize == 32 {
+			index = block.NewZExt(index, types.I64)
+		}
+
+		eltype := e.Expression.Type().(*ast.SliceType).ElType
+
+		if loadInst, ok := target.(*ir.InstLoad); ok {
+			t0 := block.NewGetElementPtr(
+				genType(e.Expression.Type()),
+				loadInst.Src,
+				constant.NewInt(types.I32, int64(0)),
+				constant.NewInt(types.I32, int64(0)),
+			)
+
+			t1 := block.NewGetElementPtr(
+				genType(e.Expression.Type()),
+				loadInst.Src,
+				constant.NewInt(types.I32, int64(0)),
+				constant.NewInt(types.I32, int64(1)),
+			)
+
+			buffer := block.NewLoad(types.NewPointer(genType(eltype)), t0)
+			length := block.NewLoad(types.I64, t1)
+
+			// TODO: bounds checking
+			idxOutOfBoundsBlock := block.Parent.NewBlock("")
+			afterBlock := block.Parent.NewBlock("")
+
+			idxLessThan0 := block.NewICmp(enum.IPredSLT, index, constant.NewInt(types.I64, 0))
+			idxGreaterThanLen := block.NewICmp(enum.IPredSGT, index, length)
+			idxNotOk := block.NewOr(idxGreaterThanLen, idxLessThan0)
+
+			block.NewCondBr(idxNotOk, idxOutOfBoundsBlock, afterBlock)
+
+			message := "runtime-error: index out of bounds\x0A\x00"
+			formatStringDef := module.NewGlobalDef("", constant.NewCharArrayFromString(message))
+			idxOutOfBoundsBlock.NewCall(panicDeclaration, constant.NewGetElementPtr(
+				types.NewArray(uint64(len(message)), types.I8),
+				formatStringDef,
+				constant.NewInt(types.I32, 0),
+				constant.NewInt(types.I32, 0),
+			))
+			idxOutOfBoundsBlock.NewUnreachable()
+
+			block = afterBlock
+
+			ptrToValue := block.NewGetElementPtr(
+				genType(eltype),
+				buffer,
+				index,
+			)
+
+			return block.NewLoad(genType(eltype), ptrToValue)
+		} else {
+			panic("internal error: index expression on non-load instruction.")
+		}
 	case *ast.CompositeLiteral:
 		e := expr.(*ast.CompositeLiteral)
 		st := e.Typ.(*ast.StructType)
@@ -419,6 +486,52 @@ func genExpression(expr ast.Expression) value.Value {
 		}
 
 		return block.NewLoad(t, local)
+	case *ast.SliceLiteral:
+		e := expr.(*ast.SliceLiteral)
+		local := block.NewAlloca(genType(e.Type()))
+		eltype := e.Type().(*ast.SliceType).ElType
+
+		buffer := block.NewGetElementPtr(
+			genType(e.Type()),
+			local,
+			constant.NewInt(types.I32, int64(0)),
+			constant.NewInt(types.I32, int64(0)),
+		)
+
+		length := block.NewGetElementPtr(
+			genType(e.Type()),
+			local,
+			constant.NewInt(types.I32, int64(0)),
+			constant.NewInt(types.I32, int64(1)),
+		)
+
+		capacity := block.NewGetElementPtr(
+			genType(e.Type()),
+			local,
+			constant.NewInt(types.I32, int64(0)),
+			constant.NewInt(types.I32, int64(2)),
+		)
+
+		ptrmem := block.NewAlloca(genType(e.Type().(*ast.SliceType).ElType))
+		block.NewStore(constant.NewInt(types.I64, int64(len(e.Expressions))), length)
+
+		if len(e.Expressions) == 0 {
+			block.NewStore(constant.NewInt(types.I64, 8), capacity)
+			ptrmem.NElems = constant.NewInt(types.I32, 8)
+		} else {
+			block.NewStore(constant.NewInt(types.I64, int64(len(e.Expressions))), capacity)
+			ptrmem.NElems = constant.NewInt(types.I32, int64(len(e.Expressions)))
+		}
+
+		block.NewStore(ptrmem, buffer)
+
+		for i, value := range e.Expressions {
+			loadedBuffer := block.NewLoad(types.NewPointer(genType(eltype)), buffer)
+			pointerToElement := block.NewGetElementPtr(genType(eltype), loadedBuffer, constant.NewInt(types.I64, int64(i)))
+			block.NewStore(genExpression(value), pointerToElement)
+		}
+
+		return block.NewLoad(genType(e.Type()), local)
 	case *ast.ReferenceOf:
 		e := expr.(*ast.ReferenceOf)
 		target := genExpression(e.Target)
@@ -461,8 +574,17 @@ func genExpression(expr ast.Expression) value.Value {
 func Gen(statements []ast.Statement) string {
 	module = ir.NewModule()
 
-	printfDeclaration = module.NewFunc("printf", types.I32, ir.NewParam("format", types.I8Ptr))
+	exitDeclaration := module.NewFunc("exit", types.Void, ir.NewParam("", types.I32))
+
+	printfDeclaration = module.NewFunc("printf", types.I32, ir.NewParam("", types.I8Ptr))
 	printfDeclaration.Sig.Variadic = true
+
+	panicMessageParam := ir.NewParam("message", types.I8Ptr)
+	panicDeclaration = module.NewFunc("panic", types.Void, panicMessageParam)
+	panicBlock := panicDeclaration.NewBlock("")
+	panicBlock.NewCall(printfDeclaration, panicMessageParam)
+	panicBlock.NewCall(exitDeclaration, constant.NewInt(types.I32, 1))
+	panicBlock.NewRet(nil)
 
 	boolToStringParam := ir.NewParam("b", types.I1)
 	boolToStringDeclaration = module.NewFunc("boolToString", types.I8Ptr, boolToStringParam)

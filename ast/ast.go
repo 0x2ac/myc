@@ -30,10 +30,15 @@ type PointerType struct {
 	ElType Type
 }
 
+type SliceType struct {
+	ElType Type
+}
+
 func (*Primitive) isType()    {}
 func (*FunctionType) isType() {}
 func (*StructType) isType()   {}
 func (*PointerType) isType()  {}
+func (*SliceType) isType()    {}
 
 func (p *Primitive) Equals(t Type) bool {
 	if primType, ok := t.(*Primitive); ok {
@@ -123,6 +128,18 @@ func (p *PointerType) Equals(t Type) bool {
 
 func (p *PointerType) String() string {
 	return fmt.Sprintf("*%s", p.ElType.String())
+}
+
+func (s *SliceType) Equals(t Type) bool {
+	if sliceType, ok := t.(*SliceType); ok {
+		return s.ElType.Equals(sliceType.ElType)
+	}
+
+	return false
+}
+
+func (s *SliceType) String() string {
+	return fmt.Sprintf("[%s]", s.ElType.String())
 }
 
 type Statement interface {
@@ -255,12 +272,27 @@ type GetExpression struct {
 	Typ Type
 }
 
+type IndexExpression struct {
+	Expression Expression
+	Index      Expression
+
+	LeftBracketToken lexer.Token
+	Typ              Type
+}
+
 type CompositeLiteral struct {
 	Typ                 Type
 	NamedInitializers   *[]NamedInitializer
 	UnnamedInitializers *[]Expression
 
 	LeftBraceToken lexer.Token
+}
+
+type SliceLiteral struct {
+	Expressions []Expression
+
+	Typ              Type
+	LeftBracketToken lexer.Token
 }
 
 type NamedInitializer struct {
@@ -293,7 +325,9 @@ func (*BinaryExpression) isExpression()   {}
 func (*VariableExpression) isExpression() {}
 func (*CallExpression) isExpression()     {}
 func (*GetExpression) isExpression()      {}
+func (*IndexExpression) isExpression()    {}
 func (*CompositeLiteral) isExpression()   {}
+func (*SliceLiteral) isExpression()       {}
 func (*ReferenceOf) isExpression()        {}
 func (*Dereference) isExpression()        {}
 func (*Literal) isExpression()            {}
@@ -313,8 +347,14 @@ func (c *CallExpression) Type() Type {
 func (g *GetExpression) Type() Type {
 	return g.Typ
 }
+func (g *IndexExpression) Type() Type {
+	return g.Typ
+}
 func (c *CompositeLiteral) Type() Type {
 	return c.Typ
+}
+func (s *SliceLiteral) Type() Type {
+	return s.Typ
 }
 func (r *ReferenceOf) Type() Type {
 	return r.Typ

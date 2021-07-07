@@ -52,12 +52,16 @@ const (
 	RIGHT_PAREN
 	LEFT_BRACE
 	RIGHT_BRACE
+	LEFT_BRACKET
+	RIGHT_BRACKET
 	COMMA
 	DOT
 	COLON
 	CARET
 	AND
 	BANG
+	INTERP_BEGIN
+	INTERP_END
 
 	binaryop_begin
 	EQUAL
@@ -157,8 +161,8 @@ func isAlphaNumeric(b byte) bool {
 func lexString() {
 	for peek() != '"' && !isAtEnd() {
 		if peek() == '\n' {
-			line++
-			lineBegin = current
+			// TODO: Multi-line strings wouldn't be too difficult to implement
+			lexError(line, "Strings must be on a single line.")
 		}
 
 		advance()
@@ -225,6 +229,10 @@ func ScanToken() {
 		addToken(LEFT_BRACE, "")
 	case '}':
 		addToken(RIGHT_BRACE, "")
+	case '[':
+		addToken(LEFT_BRACKET, "")
+	case ']':
+		addToken(RIGHT_BRACKET, "")
 	case ',':
 		addToken(COMMA, "")
 	case '.':
@@ -306,6 +314,7 @@ func ScanToken() {
 				(currentTokensType == IDENTIFIER ||
 					currentTokensType == RIGHT_PAREN ||
 					currentTokensType == RIGHT_BRACE ||
+					currentTokensType == RIGHT_BRACKET ||
 					currentTokensType == RETURN ||
 					currentTokensType == INT ||
 					currentTokensType == FLOAT ||
