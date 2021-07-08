@@ -14,6 +14,12 @@ func genType(t ast.Type) string {
 		return t.(*ast.StructType).Name
 	case *ast.PointerType:
 		return fmt.Sprintf("%s*", genType(t.(*ast.PointerType).ElType))
+	case *ast.SliceType:
+		st := t.(*ast.SliceType)
+		return fmt.Sprintf(
+			"struct {%s* buffer; u64 length; u64 capacity;}",
+			genType(st.ElType),
+		)
 	}
 
 	panic("Type node has invalid static type.")
@@ -29,6 +35,10 @@ func genStatement(stmt ast.Statement) string {
 		return genVariableDeclaration(stmt.(*ast.VariableDeclaration))
 	case *ast.ConstantDeclaration:
 		return genConstantDeclaration(stmt.(*ast.ConstantDeclaration))
+	case *ast.IfStatement:
+		return genIfStatement(stmt.(*ast.IfStatement))
+	case *ast.WhileStatement:
+		return genWhileStatement(stmt.(*ast.WhileStatement))
 	case *ast.PrintStatement:
 		return genPrintStatement(stmt.(*ast.PrintStatement))
 	case *ast.ReturnStatement:
@@ -106,6 +116,40 @@ func genConstantDeclaration(decl *ast.ConstantDeclaration) string {
 	)
 }
 
+func genIfStatement(s *ast.IfStatement) string {
+	elifStmts := ""
+
+	for _, elifStmt := range s.ElseIfStatements {
+		elifStmts += fmt.Sprintf(
+			"else if (%s) %s",
+			genExpression(elifStmt.Condition),
+			genBlockStatement(&elifStmt.Block),
+		)
+	}
+
+	elseStmt := ""
+
+	if s.ElseBlock != nil {
+		elseStmt += fmt.Sprintf("else %s", genBlockStatement(s.ElseBlock))
+	}
+
+	return fmt.Sprintf(
+		"if (%s) %s %s %s",
+		genExpression(s.Condition),
+		genBlockStatement(&s.IfBlock),
+		elifStmts,
+		elseStmt,
+	)
+}
+
+func genWhileStatement(s *ast.WhileStatement) string {
+	return fmt.Sprintf(
+		"while (%s) %s",
+		genExpression(s.Condition),
+		genBlockStatement(&s.Block),
+	)
+}
+
 func getFormatStringForType(t ast.Type) string {
 	if primitive, ok := t.(*ast.Primitive); ok {
 		switch primitive.Name {
@@ -113,8 +157,12 @@ func getFormatStringForType(t ast.Type) string {
 			return "%d"
 		case "float":
 			return "%f"
+		case "bool":
+			return "%s"
 		}
 	} else if _, ok := t.(*ast.StructType); ok {
+		return "%p"
+	} else if _, ok := t.(*ast.SliceType); ok {
 		return "%p"
 	}
 
@@ -130,6 +178,10 @@ func genPrintStatement(printStmt *ast.PrintStatement) string {
 		if _, ok := expr.Type().(*ast.StructType); ok {
 			// For now structs only get their reference printed
 			arguments += "&" + genExpression(expr)
+		} else if _, ok := expr.Type().(*ast.SliceType); ok {
+			arguments += "&" + genExpression(expr)
+		} else if p, ok := expr.Type().(*ast.Primitive); ok && p.Name == "bool" {
+			arguments += fmt.Sprintf("boolToString(%s)", genExpression(expr))
 		} else {
 			arguments += genExpression(expr)
 		}
@@ -171,8 +223,12 @@ func genExpression(expr ast.Expression) string {
 		return genVariableExpression(expr.(*ast.VariableExpression))
 	case *ast.GetExpression:
 		return genGetExpression(expr.(*ast.GetExpression))
+	case *ast.IndexExpression:
+		return genIndexExpression(expr.(*ast.IndexExpression))
 	case *ast.CompositeLiteral:
 		return genCompositeLiteral(expr.(*ast.CompositeLiteral))
+	case *ast.SliceLiteral:
+		return genSliceLiteral(expr.(*ast.SliceLiteral))
 	case *ast.ReferenceOf:
 		return genReferenceOf(expr.(*ast.ReferenceOf))
 	case *ast.Dereference:
@@ -222,6 +278,14 @@ func genGetExpression(getExpr *ast.GetExpression) string {
 	return fmt.Sprintf("%s.%s", genExpression(getExpr.Expression), getExpr.Identifier.Lexeme)
 }
 
+func genIndexExpression(indexExpr *ast.IndexExpression) string {
+	return fmt.Sprintf(
+		"slice__%s__at(%s)",
+		genType(indexExpr.Expression.Type().(*ast.SliceType).ElType),
+		genExpression(indexExpr.Index),
+	)
+}
+
 func genCompositeLiteral(compExpr *ast.CompositeLiteral) string {
 	initializerString := ""
 
@@ -247,6 +311,26 @@ func genCompositeLiteral(compExpr *ast.CompositeLiteral) string {
 		"(%s){%s}",
 		compExpr.Typ.(*ast.StructType).Name,
 		initializerString,
+	)
+}
+
+func genSliceLiteral(slit *ast.SliceLiteral) string {
+	gennedExprs := ""
+
+	for i, e := range slit.Expressions {
+		gennedExprs += genExpression(e)
+
+		if i != len(slit.Expressions)-1 {
+			gennedExprs += ", "
+		}
+	}
+
+	return fmt.Sprintf(
+		"slice__%s__from_arr((%s){%s}, %d)",
+		genType(slit.Type().(*ast.SliceType).ElType),
+		genType(slit.Type().(*ast.SliceType).ElType),
+		gennedExprs,
+		len(slit.Expressions),
 	)
 }
 
