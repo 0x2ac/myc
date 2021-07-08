@@ -19,12 +19,23 @@ func genType(t ast.Type) types.Type {
 		return genPrimitive(t.(*ast.Primitive))
 	case *ast.SliceType:
 		st := t.(*ast.SliceType)
-		// struct {
-		//     buffer   *ElType
-		//     length   i64
-		//     capacity i64
-		// }
-		return types.NewStruct(types.NewPointer(genType(st.ElType)), types.I64, types.I64)
+		// { buffer *ElType, length i64, capacity i64 }
+		typ := types.NewStruct(types.NewPointer(genType(st.ElType)), types.I64, types.I64)
+
+		printFuncName := fmt.Sprintf("myc__slice_%s_print", getTypeName(st.ElType))
+		printFuncExists := false
+
+		for _, f := range module.Funcs {
+			if f.Name() == printFuncName {
+				printFuncExists = true
+			}
+		}
+
+		if !printFuncExists {
+			createSlicePrint(st.ElType, typ)
+		}
+
+		return typ
 	case *ast.StructType:
 		return typespace[t.(*ast.StructType).Name]
 	case *ast.PointerType:
@@ -36,6 +47,8 @@ func genType(t ast.Type) types.Type {
 
 func genPrimitive(primitive *ast.Primitive) types.Type {
 	switch primitive.Name {
+	case "str":
+		return types.NewStruct(types.I8Ptr, types.I64, types.I64)
 	case "int":
 		return types.I32
 	case "float":
@@ -51,31 +64,35 @@ var (
 	module *ir.Module
 	block  *ir.Block
 
-	panicDeclaration        *ir.Func
-	printfDeclaration       *ir.Func
-	boolToStringDeclaration *ir.Func
+	panicDeclaration  *ir.Func
+	printfDeclaration *ir.Func
 
 	namespace = make(map[string]value.Value)
 	typespace = make(map[string]types.Type)
 )
 
-func getFormatStringForType(t ast.Type) string {
-	if primitive, ok := t.(*ast.Primitive); ok {
-		switch primitive.Name {
-		case "int":
-			return "%d"
-		case "float":
-			return "%f"
-		case "bool":
-			return "%s"
-		}
-	} else if _, ok := t.(*ast.StructType); ok {
-		return "%p"
-	} else if _, ok := t.(*ast.SliceType); ok {
-		return "%p"
+func getTypeName(t ast.Type) string {
+	if p, ok := t.(*ast.Primitive); ok {
+		return p.Name
+	} else if s, ok := t.(*ast.StructType); ok {
+		return s.Name
+	} else if st, ok := t.(*ast.SliceType); ok {
+		return fmt.Sprintf("slice_%s", getTypeName(st.ElType))
 	}
 
-	panic("Invalid type passed to `getFormatStringForType`.")
+	panic("Invalid type passed to `getTypeName`.")
+}
+
+func getPrintFuncForType(t ast.Type) *ir.Func {
+	expectedName := fmt.Sprintf("myc__%s_print", getTypeName(t))
+
+	for _, f := range module.Funcs {
+		if f.Name() == expectedName {
+			return f
+		}
+	}
+
+	panic(fmt.Sprintf("Could not find print function for type: '%s'.", t.String()))
 }
 
 func genStatement(stmt ast.Statement) {
@@ -90,6 +107,74 @@ func genStatement(stmt ast.Statement) {
 
 		t := types.NewStruct(fields...)
 		typespace[s.Identifier.Lexeme] = t
+
+		selfParam := ir.NewParam("", types.NewPointer(t))
+		structPrintFunction := module.NewFunc(fmt.Sprintf("myc__%s_print", s.Identifier.Lexeme), types.Void, selfParam)
+		printBlock := structPrintFunction.NewBlock("")
+
+		initString := fmt.Sprintf("%s{\x00", s.Identifier.Lexeme)
+		initStringDef := module.NewGlobalDef("", constant.NewCharArrayFromString(initString))
+		printBlock.NewCall(printfDeclaration, constant.NewGetElementPtr(
+			types.NewArray(uint64(len(initString)), types.I8),
+			initStringDef,
+			constant.NewInt(types.I32, 0),
+			constant.NewInt(types.I32, 0),
+		))
+
+		colonSpace := ": \x00"
+		colonSpaceDef := module.NewGlobalDef("", constant.NewCharArrayFromString(colonSpace))
+
+		commaSpace := ", \x00"
+		commaSpaceDef := module.NewGlobalDef("", constant.NewCharArrayFromString(commaSpace))
+
+		for i, m := range s.Members {
+			fieldString := fmt.Sprintf("%s\x00", m.Identifier.Lexeme)
+			fieldStringDef := module.NewGlobalDef("", constant.NewCharArrayFromString(fieldString))
+			printBlock.NewCall(printfDeclaration, constant.NewGetElementPtr(
+				types.NewArray(uint64(len(fieldString)), types.I8),
+				fieldStringDef,
+				constant.NewInt(types.I32, 0),
+				constant.NewInt(types.I32, 0),
+			))
+			printBlock.NewCall(printfDeclaration, constant.NewGetElementPtr(
+				types.NewArray(uint64(len(colonSpace)), types.I8),
+				colonSpaceDef,
+				constant.NewInt(types.I32, 0),
+				constant.NewInt(types.I32, 0),
+			))
+
+			member := printBlock.NewGetElementPtr(t, selfParam,
+				constant.NewInt(types.I32, 0),
+				constant.NewInt(types.I32, int64(i)),
+			)
+			loadedMember := printBlock.NewLoad(genType(m.Type), member)
+
+			if _, ok := loadedMember.Type().(*types.StructType); ok {
+				printBlock.NewCall(getPrintFuncForType(m.Type), loadedMember.Src)
+			} else {
+				printBlock.NewCall(getPrintFuncForType(m.Type), loadedMember)
+			}
+
+			if i != len(s.Members)-1 {
+				printBlock.NewCall(printfDeclaration, constant.NewGetElementPtr(
+					types.NewArray(uint64(len(commaSpace)), types.I8),
+					commaSpaceDef,
+					constant.NewInt(types.I32, 0),
+					constant.NewInt(types.I32, 0),
+				))
+			}
+		}
+
+		closeString := "}\x00"
+		closeStringDef := module.NewGlobalDef("", constant.NewCharArrayFromString(closeString))
+		printBlock.NewCall(printfDeclaration, constant.NewGetElementPtr(
+			types.NewArray(uint64(len(closeString)), types.I8),
+			closeStringDef,
+			constant.NewInt(types.I32, 0),
+			constant.NewInt(types.I32, 0),
+		))
+
+		printBlock.NewRet(nil)
 	case *ast.FunctionDeclaration:
 		s := stmt.(*ast.FunctionDeclaration)
 		irParams := []*ir.Param{}
@@ -198,46 +283,36 @@ func genStatement(stmt ast.Statement) {
 	case *ast.PrintStatement:
 		s := stmt.(*ast.PrintStatement)
 
-		formatString := ""
-		printfArgs := []value.Value{}
-		for i, expr := range s.Expressions {
-			formatString += getFormatStringForType(expr.Type())
+		space := " \x00"
+		spaceDef := module.NewGlobalDef("", constant.NewCharArrayFromString(space))
 
-			e := genExpression(expr)
-			if _, ok := e.Type().(*types.StructType); ok {
-				printfArgs = append(printfArgs, e.(*ir.InstLoad).Src)
-			} else if itype, ok := e.Type().(*types.IntType); ok && itype.BitSize == 1 {
-				stringed := block.NewCall(boolToStringDeclaration, e)
-				printfArgs = append(printfArgs, stringed)
+		lf := "\n\x00"
+		lfDef := module.NewGlobalDef("", constant.NewCharArrayFromString(lf))
+
+		for i, e := range s.Expressions {
+			genned := genExpression(e)
+			if _, ok := genned.Type().(*types.StructType); ok {
+				block.NewCall(getPrintFuncForType(e.Type()), genned.(*ir.InstLoad).Src)
 			} else {
-				printfArgs = append(printfArgs, e)
+				block.NewCall(getPrintFuncForType(e.Type()), genned)
 			}
 
 			if i != len(s.Expressions)-1 {
-				formatString += " "
-			} else {
-				formatString += "\x0A\x00"
-				// Null-terminate and add trailing LF.
+				block.NewCall(printfDeclaration, constant.NewGetElementPtr(
+					types.NewArray(uint64(len(space)), types.I8),
+					spaceDef,
+					constant.NewInt(types.I32, 0),
+					constant.NewInt(types.I32, 0),
+				))
 			}
 		}
 
-		formatStringDef := module.NewGlobalDef("", constant.NewCharArrayFromString(formatString))
-		printfArgs = append(
-			[]value.Value{
-				constant.NewGetElementPtr(
-					types.NewArray(uint64(len(formatString)), types.I8),
-					formatStringDef,
-					constant.NewInt(types.I32, 0),
-					constant.NewInt(types.I32, 0),
-				),
-			},
-			printfArgs...,
-		)
-
-		block.NewCall(
-			printfDeclaration,
-			printfArgs...,
-		)
+		block.NewCall(printfDeclaration, constant.NewGetElementPtr(
+			types.NewArray(uint64(len(lf)), types.I8),
+			lfDef,
+			constant.NewInt(types.I32, 0),
+			constant.NewInt(types.I32, 0),
+		))
 	case *ast.ReturnStatement:
 		s := stmt.(*ast.ReturnStatement)
 		block.NewRet(genExpression(s.Expression))
@@ -424,7 +499,6 @@ func genExpression(expr ast.Expression) value.Value {
 			buffer := block.NewLoad(types.NewPointer(genType(eltype)), t0)
 			length := block.NewLoad(types.I64, t1)
 
-			// TODO: bounds checking
 			idxOutOfBoundsBlock := block.Parent.NewBlock("")
 			afterBlock := block.Parent.NewBlock("")
 
@@ -571,6 +645,169 @@ func genExpression(expr ast.Expression) value.Value {
 	panic(fmt.Sprintf("Expression node has invalid static type. %T", expr))
 }
 
+func createSlicePrint(elType ast.Type, llvmType types.Type) {
+	openBracket := "[\x00"
+	openBracketDef := module.NewGlobalDef("", constant.NewCharArrayFromString(openBracket))
+	commaSpace := ", \x00"
+	commaSpaceDef := module.NewGlobalDef("", constant.NewCharArrayFromString(commaSpace))
+	closeBracket := "]\x00"
+	closeBracketDef := module.NewGlobalDef("", constant.NewCharArrayFromString(closeBracket))
+
+	param := ir.NewParam("", types.NewPointer(llvmType))
+	f := module.NewFunc(
+		fmt.Sprintf("myc__slice_%s_print", getTypeName(elType)),
+		types.Void,
+		param,
+	)
+	b := f.NewBlock("")
+
+	idxVar := b.NewAlloca(types.I64)
+	b.NewStore(constant.NewInt(types.I64, 0), idxVar)
+	idx := b.NewLoad(types.I64, idxVar)
+	length := b.NewGetElementPtr(llvmType, param,
+		constant.NewInt(types.I32, 0),
+		constant.NewInt(types.I32, 1),
+	)
+	loadedLength := b.NewLoad(types.I64, length)
+
+	buffer := b.NewGetElementPtr(
+		llvmType,
+		param,
+		constant.NewInt(types.I32, 0),
+		constant.NewInt(types.I32, 0),
+	)
+	loadedBuffer := b.NewLoad(types.NewPointer(genType(elType)), buffer)
+
+	b.NewCall(printfDeclaration, constant.NewGetElementPtr(
+		types.NewArray(uint64(len(openBracket)), types.I8),
+		openBracketDef,
+		constant.NewInt(types.I32, 0),
+		constant.NewInt(types.I32, 0),
+	))
+
+	comparison := b.NewICmp(enum.IPredULT, idx, loadedLength)
+	loopBlock := b.Parent.NewBlock("")
+	nocommaPrintBlock := b.Parent.NewBlock("")
+	afterBlock := b.Parent.NewBlock("")
+	b.NewCondBr(comparison, loopBlock, afterBlock)
+
+	idx = loopBlock.NewLoad(types.I64, idxVar)
+	valueAtIdx := loopBlock.NewGetElementPtr(genType(elType), loadedBuffer, idx)
+	if _, ok := genType(elType).(*types.StructType); ok {
+		loopBlock.NewCall(getPrintFuncForType(elType), valueAtIdx)
+	} else {
+		loadedValue := loopBlock.NewLoad(genType(elType), valueAtIdx)
+		loopBlock.NewCall(getPrintFuncForType(elType), loadedValue)
+	}
+	loopBlock.NewCall(printfDeclaration, constant.NewGetElementPtr(
+		types.NewArray(uint64(len(commaSpace)), types.I8),
+		commaSpaceDef,
+		constant.NewInt(types.I32, 0),
+		constant.NewInt(types.I32, 0),
+	))
+
+	incrementedIdx := loopBlock.NewAdd(idx, constant.NewInt(types.I64, 1))
+	loopBlock.NewStore(incrementedIdx, idxVar)
+	comparisonAgain := loopBlock.NewICmp(enum.IPredEQ, incrementedIdx, loopBlock.NewSub(loadedLength, constant.NewInt(types.I64, 1)))
+	loopBlock.NewCondBr(comparisonAgain, nocommaPrintBlock, loopBlock)
+
+	idx = nocommaPrintBlock.NewLoad(types.I64, idxVar)
+	valueAtIdx = nocommaPrintBlock.NewGetElementPtr(genType(elType), loadedBuffer, idx)
+	if _, ok := genType(elType).(*types.StructType); ok {
+		nocommaPrintBlock.NewCall(getPrintFuncForType(elType), valueAtIdx)
+	} else {
+		loadedValue := nocommaPrintBlock.NewLoad(genType(elType), valueAtIdx)
+		nocommaPrintBlock.NewCall(getPrintFuncForType(elType), loadedValue)
+	}
+	nocommaPrintBlock.NewBr(afterBlock)
+
+	afterBlock.NewCall(printfDeclaration, constant.NewGetElementPtr(
+		types.NewArray(uint64(len(closeBracket)), types.I8),
+		closeBracketDef,
+		constant.NewInt(types.I32, 0),
+		constant.NewInt(types.I32, 0),
+	))
+	afterBlock.NewRet(nil)
+}
+
+func createPrimitivePrintFunctions() {
+	var param *ir.Param
+	var fmtDef *ir.Global
+
+	// int
+	param = ir.NewParam("", genType(&ast.Primitive{Name: "int"}))
+	intf := module.NewFunc("myc__int_print", types.Void, param)
+	ib := intf.NewBlock("")
+	fmtDef = module.NewGlobalDef("", constant.NewCharArrayFromString("%d\x00"))
+	ib.NewCall(printfDeclaration, constant.NewGetElementPtr(
+		types.NewArray(3, types.I8),
+		fmtDef,
+		constant.NewInt(types.I32, 0),
+		constant.NewInt(types.I32, 0),
+	), param)
+	ib.NewRet(nil)
+
+	// float
+	param = ir.NewParam("", genType(&ast.Primitive{Name: "float"}))
+	floatf := module.NewFunc("myc__float_print", types.Void, param)
+	fb := floatf.NewBlock("")
+	fmtDef = module.NewGlobalDef("", constant.NewCharArrayFromString("%.16g\x00"))
+	fb.NewCall(printfDeclaration, constant.NewGetElementPtr(
+		types.NewArray(6, types.I8),
+		fmtDef,
+		constant.NewInt(types.I32, 0),
+		constant.NewInt(types.I32, 0),
+	), param)
+	fb.NewRet(nil)
+
+	// bool
+	param = ir.NewParam("", genType(&ast.Primitive{Name: "bool"}))
+	boolf := module.NewFunc("myc__bool_print", types.Void, param)
+	entryBlock := boolf.NewBlock("entry")
+	trueBlock := boolf.NewBlock("iftrue")
+	falseBlock := boolf.NewBlock("iffalse")
+	entryBlock.NewCondBr(param, trueBlock, falseBlock)
+
+	trueStringDef := module.NewGlobalDef("", constant.NewCharArrayFromString("true\x00"))
+	falseStringDef := module.NewGlobalDef("", constant.NewCharArrayFromString("false\x00"))
+
+	trueBlock.NewCall(printfDeclaration, constant.NewGetElementPtr(
+		types.NewArray(uint64(5), types.I8),
+		trueStringDef,
+		constant.NewInt(types.I32, 0),
+		constant.NewInt(types.I32, 0),
+	))
+	trueBlock.NewRet(nil)
+
+	falseBlock.NewCall(printfDeclaration, constant.NewGetElementPtr(
+		types.NewArray(uint64(6), types.I8),
+		falseStringDef,
+		constant.NewInt(types.I32, 0),
+		constant.NewInt(types.I32, 0),
+	))
+	falseBlock.NewRet(nil)
+
+	// str
+	param = ir.NewParam("", types.NewPointer(genType(&ast.Primitive{Name: "str"})))
+	strf := module.NewFunc("myc__str_print", types.Void, param)
+	sb := strf.NewBlock("")
+	buffer := sb.NewGetElementPtr(
+		genType(&ast.Primitive{Name: "str"}),
+		param,
+		constant.NewInt(types.I32, 0),
+		constant.NewInt(types.I32, 0),
+	)
+	loadedBuffer := sb.NewLoad(types.I8Ptr, buffer)
+	fmtDef = module.NewGlobalDef("", constant.NewCharArrayFromString("%s\x00"))
+	sb.NewCall(printfDeclaration, constant.NewGetElementPtr(
+		types.NewArray(3, types.I8),
+		fmtDef,
+		constant.NewInt(types.I32, 0),
+		constant.NewInt(types.I32, 0),
+	), loadedBuffer)
+	sb.NewRet(nil)
+}
+
 func Gen(statements []ast.Statement) string {
 	module = ir.NewModule()
 
@@ -579,36 +816,14 @@ func Gen(statements []ast.Statement) string {
 	printfDeclaration = module.NewFunc("printf", types.I32, ir.NewParam("", types.I8Ptr))
 	printfDeclaration.Sig.Variadic = true
 
+	createPrimitivePrintFunctions()
+
 	panicMessageParam := ir.NewParam("message", types.I8Ptr)
 	panicDeclaration = module.NewFunc("panic", types.Void, panicMessageParam)
 	panicBlock := panicDeclaration.NewBlock("")
 	panicBlock.NewCall(printfDeclaration, panicMessageParam)
 	panicBlock.NewCall(exitDeclaration, constant.NewInt(types.I32, 1))
 	panicBlock.NewRet(nil)
-
-	boolToStringParam := ir.NewParam("b", types.I1)
-	boolToStringDeclaration = module.NewFunc("boolToString", types.I8Ptr, boolToStringParam)
-	boolToStringEntryBlock := boolToStringDeclaration.NewBlock("entry")
-	boolToStringTrueBlock := boolToStringDeclaration.NewBlock("iftrue")
-	boolToStringFalseBlock := boolToStringDeclaration.NewBlock("iffalse")
-	boolToStringEntryBlock.NewCondBr(boolToStringParam, boolToStringTrueBlock, boolToStringFalseBlock)
-
-	trueStringDef := module.NewGlobalDef("", constant.NewCharArrayFromString("true\x00"))
-	falseStringDef := module.NewGlobalDef("", constant.NewCharArrayFromString("false\x00"))
-
-	boolToStringTrueBlock.NewRet(constant.NewGetElementPtr(
-		types.NewArray(uint64(5), types.I8),
-		trueStringDef,
-		constant.NewInt(types.I32, 0),
-		constant.NewInt(types.I32, 0),
-	))
-
-	boolToStringFalseBlock.NewRet(constant.NewGetElementPtr(
-		types.NewArray(uint64(6), types.I8),
-		falseStringDef,
-		constant.NewInt(types.I32, 0),
-		constant.NewInt(types.I32, 0),
-	))
 
 	cmain := module.NewFunc("main", types.I32)
 	block = cmain.NewBlock("main_block")
