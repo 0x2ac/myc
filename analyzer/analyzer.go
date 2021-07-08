@@ -413,6 +413,8 @@ func analyzeExpression(expr ast.Expression) {
 	case *ast.Literal:
 		e := expr.(*ast.Literal)
 		switch e.LiteralType {
+		case lexer.STRING:
+			e.Typ = &ast.Primitive{Name: "str"}
 		case lexer.INT:
 			e.Typ = &ast.Primitive{Name: "int"}
 		case lexer.FLOAT:

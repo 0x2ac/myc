@@ -18,6 +18,7 @@ var primitives = [...]string{
 	"int",
 	"float",
 	"bool",
+	"str",
 }
 
 func isIdentifierPrimitive(ident lexer.Token) bool {
