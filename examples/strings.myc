@@ -1,8 +1,12 @@
 var s1 = "some string"
 var s2 = "some other string"
 var s3 = s1 + " " + s2
+var s4 = "s1: '#{s1}', s2: '#{s2}'"
 
-var s5 = "s1: '#{s1}', s2: '#{s2}'"
+print s1
+print s2
+print s3
+print s4
 
 var n1 = 23
 var n2 = 34.56

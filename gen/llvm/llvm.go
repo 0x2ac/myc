@@ -48,7 +48,7 @@ func genType(t ast.Type) types.Type {
 func genPrimitive(primitive *ast.Primitive) types.Type {
 	switch primitive.Name {
 	case "str":
-		return types.NewStruct(types.I8Ptr, types.I64, types.I64)
+		return types.NewStruct(types.I8Ptr, types.I64)
 	case "int":
 		return types.I32
 	case "float":
@@ -64,8 +64,11 @@ var (
 	module *ir.Module
 	block  *ir.Block
 
-	panicDeclaration  *ir.Func
-	printfDeclaration *ir.Func
+	panicDeclaration   *ir.Func
+	putcharDeclaration *ir.Func
+	printfDeclaration  *ir.Func
+	memcpyDeclaration  *ir.Func
+	mallocDeclaration  *ir.Func
 
 	namespace = make(map[string]value.Value)
 	typespace = make(map[string]types.Type)
@@ -356,6 +359,70 @@ func genExpression(expr ast.Expression) value.Value {
 		case lexer.PLUS:
 			if e.Left.Type().Equals(&ast.Primitive{Name: "float"}) {
 				return block.NewFAdd(genExpression(e.Left), genExpression(e.Right))
+			} else if e.Left.Type().Equals(&ast.Primitive{Name: "str"}) {
+				left := genExpression(e.Left)
+				right := genExpression(e.Right)
+
+				if l, ok := left.(*ir.InstLoad); ok {
+					left = l.Src
+				}
+
+				if l, ok := right.(*ir.InstLoad); ok {
+					right = l.Src
+				}
+
+				newStr := block.NewAlloca(genType(e.Left.Type()))
+
+				leftBufferPtr := block.NewGetElementPtr(
+					genType(e.Type()), left,
+					constant.NewInt(types.I32, 0),
+					constant.NewInt(types.I32, 0),
+				)
+				leftBuffer := block.NewLoad(types.I8Ptr, leftBufferPtr)
+
+				rightBufferPtr := block.NewGetElementPtr(
+					genType(e.Type()), right,
+					constant.NewInt(types.I32, 0),
+					constant.NewInt(types.I32, 0),
+				)
+				rightBuffer := block.NewLoad(types.I8Ptr, rightBufferPtr)
+
+				leftLengthPtr := block.NewGetElementPtr(
+					genType(e.Type()), left,
+					constant.NewInt(types.I32, 0),
+					constant.NewInt(types.I32, 1),
+				)
+				rightLengthPtr := block.NewGetElementPtr(
+					genType(e.Type()), left,
+					constant.NewInt(types.I32, 0),
+					constant.NewInt(types.I32, 1),
+				)
+				leftLength := block.NewLoad(types.I64, leftLengthPtr)
+				rightLength := block.NewLoad(types.I64, rightLengthPtr)
+
+				newBufferPtr := block.NewGetElementPtr(
+					genType(e.Type()), newStr,
+					constant.NewInt(types.I32, 0),
+					constant.NewInt(types.I32, 0),
+				)
+				newLength := block.NewGetElementPtr(
+					genType(e.Type()), newStr,
+					constant.NewInt(types.I32, 0),
+					constant.NewInt(types.I32, 1),
+				)
+
+				totalLength := block.NewAdd(block.NewAdd(leftLength, rightLength), constant.NewInt(types.I64, 1))
+				block.NewStore(totalLength, newLength)
+
+				block.NewStore(block.NewCall(mallocDeclaration, totalLength), newBufferPtr)
+
+				newBuffer := block.NewLoad(types.I8Ptr, newBufferPtr)
+				newBufferOffsetByLeft := block.NewGetElementPtr(types.I8, newBuffer, leftLength)
+
+				block.NewCall(memcpyDeclaration, newBuffer, leftBuffer, leftLength, constant.NewInt(types.I1, 0))
+				block.NewCall(memcpyDeclaration, newBufferOffsetByLeft, rightBuffer, rightLength, constant.NewInt(types.I1, 0))
+
+				return block.NewLoad(genType(e.Type()), newStr)
 			}
 			return block.NewAdd(genExpression(e.Left), genExpression(e.Right))
 		case lexer.MINUS:
@@ -621,6 +688,28 @@ func genExpression(expr ast.Expression) value.Value {
 	case *ast.Literal:
 		e := expr.(*ast.Literal)
 		switch e.LiteralType {
+		case lexer.STRING:
+			rawStr := e.LiteralValue + "\x00"
+			strDef := module.NewGlobalDef("", constant.NewCharArrayFromString(rawStr))
+			str := block.NewAlloca(genType(e.Type()))
+			buffer := block.NewGetElementPtr(
+				genType(e.Type()), str,
+				constant.NewInt(types.I32, 0),
+				constant.NewInt(types.I32, 0),
+			)
+			length := block.NewGetElementPtr(
+				genType(e.Type()), str,
+				constant.NewInt(types.I32, 0),
+				constant.NewInt(types.I32, 1),
+			)
+			block.NewStore(constant.NewInt(types.I64, int64(len(rawStr))), length)
+			block.NewStore(constant.NewGetElementPtr(
+				types.NewArray(uint64(len(rawStr)), types.I8),
+				strDef,
+				constant.NewInt(types.I32, 0),
+				constant.NewInt(types.I32, 0),
+			), buffer)
+			return block.NewLoad(genType(e.Type()), str)
 		case lexer.INT:
 			parsedInt, _ := strconv.ParseInt(e.LiteralValue, 10, 32)
 			tmp := block.NewAlloca(types.I32)
@@ -791,6 +880,13 @@ func createPrimitivePrintFunctions() {
 	param = ir.NewParam("", types.NewPointer(genType(&ast.Primitive{Name: "str"})))
 	strf := module.NewFunc("myc__str_print", types.Void, param)
 	sb := strf.NewBlock("")
+	length := sb.NewGetElementPtr(
+		genType(&ast.Primitive{Name: "str"}),
+		param,
+		constant.NewInt(types.I32, 0),
+		constant.NewInt(types.I32, 1),
+	)
+	loadedLength := sb.NewLoad(types.I64, length)
 	buffer := sb.NewGetElementPtr(
 		genType(&ast.Primitive{Name: "str"}),
 		param,
@@ -799,13 +895,25 @@ func createPrimitivePrintFunctions() {
 	)
 	loadedBuffer := sb.NewLoad(types.I8Ptr, buffer)
 	fmtDef = module.NewGlobalDef("", constant.NewCharArrayFromString("%s\x00"))
-	sb.NewCall(printfDeclaration, constant.NewGetElementPtr(
-		types.NewArray(3, types.I8),
-		fmtDef,
-		constant.NewInt(types.I32, 0),
-		constant.NewInt(types.I32, 0),
-	), loadedBuffer)
-	sb.NewRet(nil)
+
+	idxVar := sb.NewAlloca(types.I64)
+	sb.NewStore(constant.NewInt(types.I64, 0), idxVar)
+	idx := sb.NewLoad(types.I64, idxVar)
+
+	comparison := sb.NewICmp(enum.IPredULT, idx, loadedLength)
+	loopBlock := sb.Parent.NewBlock("")
+	afterBlock := sb.Parent.NewBlock("")
+	sb.NewCondBr(comparison, loopBlock, afterBlock)
+
+	idx = loopBlock.NewLoad(types.I64, idxVar)
+	ptrToValue := loopBlock.NewGetElementPtr(types.I8, loadedBuffer, idx)
+	loopBlock.NewCall(putcharDeclaration, loopBlock.NewLoad(types.I8, ptrToValue))
+	incrementedIdx := loopBlock.NewAdd(idx, constant.NewInt(types.I64, 1))
+	loopBlock.NewStore(incrementedIdx, idxVar)
+	comparison = loopBlock.NewICmp(enum.IPredULT, idx, loadedLength)
+	loopBlock.NewCondBr(comparison, loopBlock, afterBlock)
+
+	afterBlock.NewRet(nil)
 }
 
 func Gen(statements []ast.Statement) string {
@@ -813,8 +921,20 @@ func Gen(statements []ast.Statement) string {
 
 	exitDeclaration := module.NewFunc("exit", types.Void, ir.NewParam("", types.I32))
 
+	putcharDeclaration = module.NewFunc("putchar", types.I32, ir.NewParam("", types.I8))
+
 	printfDeclaration = module.NewFunc("printf", types.I32, ir.NewParam("", types.I8Ptr))
 	printfDeclaration.Sig.Variadic = true
+
+	mallocDeclaration = module.NewFunc("malloc", types.I8Ptr, ir.NewParam("", types.I64))
+	memcpyDeclaration = module.NewFunc(
+		"llvm.memcpy.p0i8.p0i8.i64",
+		types.Void,
+		ir.NewParam("dest", types.I8Ptr),
+		ir.NewParam("src", types.I8Ptr),
+		ir.NewParam("len", types.I64),
+		ir.NewParam("isvolatile", types.I1),
+	)
 
 	createPrimitivePrintFunctions()
 

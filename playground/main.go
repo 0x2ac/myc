@@ -11,20 +11,10 @@ import (
 
 func main() {
 	code := `
-var s1 = "some string"
-var s2 = "some other string"
-var s3 = s1 + " " + s2
-var s4 = "s1: '#{s1}', s2: '#{s2}'"
-
-print s1
-print s2
-print s3
-print s4
-
-var n1 = 23
-var n2 = 34.56
-
-print "n1: #{n1}, n2: #{n2}"
+var a = "hello"
+var b = " world"
+var ab = a + b
+print ab
 `
 	tokens := lexer.Lex(code)
 	// repr.Println(tokens)

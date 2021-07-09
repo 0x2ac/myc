@@ -129,8 +129,16 @@ func analyzeExpression(expr ast.Expression) {
 
 		if e.Operator.Type == lexer.EQUAL {
 			e.Typ = e.Left.Type()
-		} else if e.Operator.Type == lexer.PLUS ||
-			e.Operator.Type == lexer.MINUS ||
+		} else if e.Operator.Type == lexer.PLUS {
+			if !prim.IsNumeric() && prim.Name != "str" {
+				analysisError(e.Operator, fmt.Sprintf(
+					"Operator: '%s' can only be used on numeric primitives (e.g. `int`, `float`) and `str`s.",
+					e.Operator.Lexeme,
+				))
+			}
+
+			e.Typ = e.Left.Type()
+		} else if e.Operator.Type == lexer.MINUS ||
 			e.Operator.Type == lexer.STAR ||
 			e.Operator.Type == lexer.SLASH {
 			// Arithmetic operators are only for numeric expressions
