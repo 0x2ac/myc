@@ -11,7 +11,7 @@ import (
 
 func analysisError(token lexer.Token, message string) {
 	log.Fatalf(
-		"[Analaysis Error: %d:%d] %s",
+		"[Analaysis Error: %d:%d]\n%s",
 		token.Pos.Line, token.Pos.Column, message,
 	)
 }
@@ -61,6 +61,58 @@ func (s *SymbolTable) shadow(name string, typ ast.Type) {
 var namespace = NewSymbolTable()
 var typespace = NewSymbolTable()
 
+// Returns whether an expression (e) is assignable to a variable of given type (t).
+// Will print an error at the provided error token and exit in case of a mismatch.
+func isAssignable(e ast.Expression, t ast.Type, options ...bool) error {
+	allowLvalueAssignmentToBox := false
+
+	if len(options) == 0 {
+	} else if len(options) == 1 {
+		allowLvalueAssignmentToBox = options[0]
+	} else {
+		panic("Invalid call to `isAssignable`")
+	}
+
+	if !e.Type().Equals(t) {
+		// Boxes can have unboxed variables assigned to them:
+		if b, ok := t.(*ast.BoxType); ok {
+			if !b.ElType.Equals(e.Type()) {
+				return errors.New(fmt.Sprintf(
+					"Mismatched box types. Cannot assign value of type: '%s' to type: '%s'.",
+					e.Type().String(), t.String(),
+				))
+			}
+
+			return nil
+		}
+
+		return errors.New(fmt.Sprintf(
+			"Cannot assign value of type: '%s' to type: '%s'.",
+			e.Type().String(), t.String(),
+		))
+	}
+
+	if !t.IsCopyable() && !allowLvalueAssignmentToBox {
+		// If `t` is not copyable it can only be assigned rvalues
+		isLvalue := false
+
+		if _, ok := e.(*ast.VariableExpression); ok {
+			isLvalue = true
+		} else if _, ok := e.(*ast.GetExpression); ok {
+			isLvalue = true
+		}
+
+		if isLvalue {
+			return errors.New(fmt.Sprintf(
+				"Cannot assign lvalue to type: '%s'.",
+				t.String(),
+			))
+		}
+	}
+
+	return nil
+}
+
 // Modifies the `statements` argument to add and check type information.
 // Panics with a useful error message if program has semantic errors.
 //
@@ -73,25 +125,20 @@ func Analyze(statements []ast.Statement) {
 	}
 }
 
-func resolveStructType(st *ast.StructType) error {
+func resolveStructType(st *ast.StructType) {
 	t, err := typespace.get(st.Name)
 
 	if err != nil {
-		return errors.New(fmt.Sprintf("Could not resolve struct type: '%s'", st.Name))
+		panic(fmt.Sprintf("Could not resolve struct type: '%s'", st.Name))
 	}
 
 	*st = *t.(*ast.StructType)
 
 	for _, m := range st.Members {
 		if _, ok := m.Type.(*ast.StructType); ok {
-			err = resolveStructType(m.Type.(*ast.StructType))
-			if err != nil {
-				return err
-			}
+			resolveStructType(m.Type.(*ast.StructType))
 		}
 	}
-
-	return nil
 }
 
 func analyzeExpression(expr ast.Expression) {
@@ -115,68 +162,82 @@ func analyzeExpression(expr ast.Expression) {
 		analyzeExpression(e.Left)
 		analyzeExpression(e.Right)
 
-		if !e.Left.Type().Equals(e.Right.Type()) {
-			analysisError(e.Operator, "Binary expressions must have the same type on both sides.")
-		}
-
-		prim, ok := e.Left.Type().(*ast.Primitive)
-		if !ok {
-			analysisError(e.Operator, fmt.Sprintf(
-				"Operator: '%s' can only be used on primitive types.",
-				e.Operator.Lexeme,
-			))
-		}
-
 		if e.Operator.Type == lexer.EQUAL {
-			e.Typ = e.Left.Type()
-		} else if e.Operator.Type == lexer.PLUS {
-			if !prim.IsNumeric() && prim.Name != "str" {
+			_, isVariableExpr := e.Left.(*ast.VariableExpression)
+			_, isGetExpr := e.Left.(*ast.GetExpression)
+			_, isDeref := e.Left.(*ast.Dereference)
+
+			targetIsLvalue := isVariableExpr || isGetExpr || isDeref
+
+			if !targetIsLvalue {
+				analysisError(e.Operator, "Target for assignment is not lvalue.")
+			}
+
+			err := isAssignable(e.Right, e.Left.Type())
+			if err != nil {
+				analysisError(e.Operator, err.Error())
+			}
+		} else if e.Operator.Type != lexer.EQUAL {
+			if !e.Left.Type().Equals(e.Right.Type()) {
+				analysisError(e.Operator, "Binary expressions must have the same type on both sides.")
+			}
+
+			prim, ok := e.Left.Type().(*ast.Primitive)
+			if !ok {
 				analysisError(e.Operator, fmt.Sprintf(
-					"Operator: '%s' can only be used on numeric primitives (e.g. `int`, `float`) and `str`s.",
+					"Operator: '%s' can only be used on primitive types.",
 					e.Operator.Lexeme,
 				))
 			}
 
-			e.Typ = e.Left.Type()
-		} else if e.Operator.Type == lexer.MINUS ||
-			e.Operator.Type == lexer.STAR ||
-			e.Operator.Type == lexer.SLASH {
-			// Arithmetic operators are only for numeric expressions
-			if !prim.IsNumeric() {
-				analysisError(e.Operator, fmt.Sprintf(
-					"Operator: '%s' can only be used on numeric primitives (e.g. `int`, `float`).",
-					e.Operator.Lexeme,
-				))
+			if e.Operator.Type == lexer.PLUS {
+				if !prim.IsNumeric() && prim.Name != "str" {
+					analysisError(e.Operator, fmt.Sprintf(
+						"Operator: '%s' can only be used on numeric primitives (e.g. `int`, `float`) and `str`s.",
+						e.Operator.Lexeme,
+					))
+				}
+
+				e.Typ = e.Left.Type()
+			} else if e.Operator.Type == lexer.MINUS ||
+				e.Operator.Type == lexer.STAR ||
+				e.Operator.Type == lexer.SLASH {
+				// Arithmetic operators are only for numeric expressions
+				if !prim.IsNumeric() {
+					analysisError(e.Operator, fmt.Sprintf(
+						"Operator: '%s' can only be used on numeric primitives (e.g. `int`, `float`).",
+						e.Operator.Lexeme,
+					))
+				}
+
+				e.Typ = e.Left.Type()
+			} else if e.Operator.Type == lexer.LESSER ||
+				e.Operator.Type == lexer.GREATER ||
+				e.Operator.Type == lexer.LESSER_EQUAL ||
+				e.Operator.Type == lexer.GREATER_EQUAL {
+				// Comparison operators are also for numeric expressions
+				if !prim.IsNumeric() {
+					analysisError(e.Operator, fmt.Sprintf(
+						"Operator: '%s' can only be used on numeric primitives (e.g. `int`, `float`).",
+						e.Operator.Lexeme,
+					))
+				}
+
+				e.Typ = &ast.Primitive{Name: "bool"}
+			} else if e.Operator.Type == lexer.EQUAL_EQUAL ||
+				e.Operator.Type == lexer.BANG_EQUAL {
+				e.Typ = &ast.Primitive{Name: "bool"}
+			} else if e.Operator.Type == lexer.AND_AND || e.Operator.Type == lexer.OR_OR {
+				// Logical operators only work on `bool` expressions
+				if prim.Name != "bool" {
+					analysisError(e.Operator, fmt.Sprintf(
+						"Operator: '%s' can only be used on values of type `bool`.",
+						e.Operator.Lexeme,
+					))
+				}
+
+				e.Typ = &ast.Primitive{Name: "bool"}
 			}
-
-			e.Typ = e.Left.Type()
-		} else if e.Operator.Type == lexer.LESSER ||
-			e.Operator.Type == lexer.GREATER ||
-			e.Operator.Type == lexer.LESSER_EQUAL ||
-			e.Operator.Type == lexer.GREATER_EQUAL {
-			// Comparison operators are also for numeric expressions
-			if !prim.IsNumeric() {
-				analysisError(e.Operator, fmt.Sprintf(
-					"Operator: '%s' can only be used on numeric primitives (e.g. `int`, `float`).",
-					e.Operator.Lexeme,
-				))
-			}
-
-			e.Typ = &ast.Primitive{Name: "bool"}
-		} else if e.Operator.Type == lexer.EQUAL_EQUAL ||
-			e.Operator.Type == lexer.BANG_EQUAL {
-			e.Typ = &ast.Primitive{Name: "bool"}
-		} else if e.Operator.Type == lexer.AND_AND || e.Operator.Type == lexer.OR_OR {
-			// Logical operators only work on `bool` expressions
-			if prim.Name != "bool" {
-				analysisError(e.Operator, fmt.Sprintf(
-					"Operator: '%s' can only be used on values of type `bool`.",
-					e.Operator.Lexeme,
-				))
-			}
-
-			e.Typ = &ast.Primitive{Name: "bool"}
-
 		}
 	case *ast.CallExpression:
 		e := expr.(*ast.CallExpression)
@@ -209,15 +270,14 @@ func analyzeExpression(expr ast.Expression) {
 		for i, param := range signature.Parameters {
 			analyzeExpression(e.Arguments[i])
 
-			if !param.Equals(e.Arguments[i].Type()) {
+			allowLvalueAssignmentToBox := true
+
+			err := isAssignable(e.Arguments[i], param, allowLvalueAssignmentToBox)
+
+			if err != nil {
 				analysisError(
 					e.LeftParenToken,
-					fmt.Sprintf(
-						"Mismatched type for positional argument %d. Expected value of type: `%s`, instead got value of type: `%s`.",
-						i+1,
-						param.String(),
-						e.Arguments[i].Type().String(),
-					),
+					"Mismatched type for positional argument. "+err.Error(),
 				)
 			}
 		}
@@ -247,10 +307,7 @@ func analyzeExpression(expr ast.Expression) {
 			)
 		}
 
-		err := resolveStructType(structType)
-		if err != nil {
-			analysisError(e.Identifier, "Internal compiler error:"+err.Error())
-		}
+		resolveStructType(structType)
 
 		foundMember, ok := structType.GetMember(e.Identifier.Lexeme)
 		if !ok {
@@ -295,11 +352,7 @@ func analyzeExpression(expr ast.Expression) {
 	case *ast.CompositeLiteral:
 		e := expr.(*ast.CompositeLiteral)
 		r := e.Typ.(*ast.StructType)
-		err := resolveStructType(r)
-
-		if err != nil {
-			analysisError(e.LeftBraceToken, err.Error())
-		}
+		resolveStructType(r)
 
 		if e.NamedInitializers == nil && e.UnnamedInitializers == nil {
 			analysisError(
@@ -337,16 +390,12 @@ func analyzeExpression(expr ast.Expression) {
 				}
 
 				// Check if the expression has the appropriate type for the member
-				if !initializer.Value.Type().Equals(resolvedMember.Type) {
+				err := isAssignable(initializer.Value, resolvedMember.Type)
+
+				if err != nil {
 					analysisError(
 						initializer.Identifier,
-						fmt.Sprintf(
-							"`%s.%s` has type: '%s', got expression of type: '%s'.",
-							r.Name,
-							initializer.Identifier.Lexeme,
-							resolvedMember.Type.String(),
-							initializer.Value.Type().String(),
-						),
+						"Mismatched type for struct field. "+err.Error(),
 					)
 				}
 			}
@@ -363,17 +412,15 @@ func analyzeExpression(expr ast.Expression) {
 				)
 			}
 
-			for i, intializer := range *e.UnnamedInitializers {
-				analyzeExpression(intializer)
+			for i, initializer := range *e.UnnamedInitializers {
+				analyzeExpression(initializer)
 
-				if !r.Members[i].Type.Equals(intializer.Type()) {
+				err := isAssignable(initializer, r.Members[i].Type)
+
+				if err != nil {
 					analysisError(
 						e.LeftBraceToken,
-						fmt.Sprintf(
-							"Positional initializer has incorrect type. Expected value of type: '%s' instead got value of type: '%s'.",
-							r.Members[i].Type.String(),
-							intializer.Type().String(),
-						),
+						"Positional initializer has incorrect type. "+err.Error(),
 					)
 				}
 			}
@@ -406,8 +453,14 @@ func analyzeExpression(expr ast.Expression) {
 		e := expr.(*ast.Dereference)
 		analyzeExpression(e.Expression)
 
-		ptrType, ok := e.Expression.Type().(*ast.PointerType)
-		if !ok {
+		ptrType, isPtr := e.Expression.Type().(*ast.PointerType)
+		boxType, isBox := e.Expression.Type().(*ast.BoxType)
+
+		if isPtr {
+			e.Typ = ptrType.ElType
+		} else if isBox {
+			e.Typ = boxType.ElType
+		} else {
 			analysisError(
 				e.StarToken,
 				fmt.Sprintf(
@@ -417,7 +470,6 @@ func analyzeExpression(expr ast.Expression) {
 			)
 		}
 
-		e.Typ = ptrType.ElType
 	case *ast.Literal:
 		e := expr.(*ast.Literal)
 		switch e.LiteralType {
@@ -452,6 +504,9 @@ func analyzeStatement(statement ast.Statement) {
 		onlyTypeParams := []ast.Type{}
 		for _, p := range s.Parameters {
 			onlyTypeParams = append(onlyTypeParams, p.Type)
+			if st, ok := p.Type.(*ast.StructType); ok {
+				resolveStructType(st)
+			}
 		}
 
 		signature := ast.FunctionType{
@@ -491,8 +546,12 @@ func analyzeStatement(statement ast.Statement) {
 		s := statement.(*ast.StructDeclaration)
 
 		for _, m := range s.Members {
-			if m.Type.Equals(&ast.StructType{Name: s.Identifier.Lexeme}) {
-				analysisError(m.Identifier, "Cannot nest struct type as size would be unknown.")
+			if st, ok := m.Type.(*ast.StructType); ok {
+				if st.Name == s.Identifier.Lexeme {
+					analysisError(m.Identifier, "Cannot nest struct type as size would be unknown.")
+				}
+
+				resolveStructType(st)
 			}
 		}
 
@@ -517,12 +576,24 @@ func analyzeStatement(statement ast.Statement) {
 			// e.g. var foo
 			analysisError(s.Identifier, "Variable declaration must have either type or initial value.")
 		} else if s.Type == nil && s.Value != nil {
+			// e.g. var foo = []
+			if sliceLit, ok := s.Value.(*ast.SliceLiteral); ok && len(sliceLit.Expressions) == 0 {
+				analysisError(s.Identifier, "Cannot infer type of 0 element slice literal.")
+			}
+
+			// // e.g. var foo = nil
+			// if l, ok := s.Value.(*ast.Literal); ok && l.LiteralType == lexer.NIL {
+			// 	analysisError(s.Identifier, "Cannot infer type of variable initialized with `nil`.")
+			// }
+
 			// e.g. var foo = 42
 			s.Type = s.Value.Type()
 		} else if s.Type != nil && s.Value != nil {
 			// e.g. var foo string = 42
-			if !s.Type.Equals(s.Value.Type()) {
-				analysisError(s.Identifier, "Initial expression has different type than provided one.")
+			err := isAssignable(s.Value, s.Type)
+
+			if err != nil {
+				analysisError(s.Identifier, "Initial expression has different type than provided one."+err.Error())
 			}
 		}
 		// We do nothing in the final case:
@@ -535,6 +606,12 @@ func analyzeStatement(statement ast.Statement) {
 	case *ast.ConstantDeclaration:
 		s := statement.(*ast.ConstantDeclaration)
 		analyzeExpression(s.Value)
+
+		// e.g. const foo = []
+		if sliceLit, ok := s.Value.(*ast.SliceLiteral); ok && len(sliceLit.Expressions) == 0 {
+			analysisError(s.Identifier, "Cannot declare constant with 0 element slice literal.")
+		}
+
 		err := namespace.declare(s.Identifier.Lexeme, s.Value.Type())
 		if err != nil {
 			analysisError(s.Identifier, err.Error())
@@ -610,14 +687,12 @@ func analyzeStatement(statement ast.Statement) {
 		} else if s.Expression != nil && functionScope.ReturnType == nil {
 			analysisError(s.ReturnToken, "Returning value in void function.")
 		} else if s.Expression != nil {
-			if !s.Expression.Type().Equals(functionScope.ReturnType) {
+			err := isAssignable(s.Expression, functionScope.ReturnType)
+
+			if err != nil {
 				analysisError(
 					s.ReturnToken,
-					fmt.Sprintf(
-						"Mismatched return type. Expected type: `%s` instead got: `%s`.",
-						functionScope.ReturnType.String(),
-						s.Expression.Type().String(),
-					),
+					"Mismatched return type. "+err.Error(),
 				)
 			}
 		}

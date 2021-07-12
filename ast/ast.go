@@ -10,6 +10,7 @@ type Type interface {
 	isType()
 	Equals(Type) bool
 	String() string
+	IsCopyable() bool
 }
 
 type Primitive struct {
@@ -30,6 +31,10 @@ type PointerType struct {
 	ElType Type
 }
 
+type BoxType struct {
+	ElType Type
+}
+
 type SliceType struct {
 	ElType Type
 }
@@ -38,6 +43,7 @@ func (*Primitive) isType()    {}
 func (*FunctionType) isType() {}
 func (*StructType) isType()   {}
 func (*PointerType) isType()  {}
+func (*BoxType) isType()      {}
 func (*SliceType) isType()    {}
 
 func (p *Primitive) Equals(t Type) bool {
@@ -50,6 +56,10 @@ func (p *Primitive) Equals(t Type) bool {
 
 func (p *Primitive) String() string {
 	return p.Name
+}
+
+func (p *Primitive) IsCopyable() bool {
+	return p.Name != "str"
 }
 
 func (p *Primitive) IsNumeric() bool {
@@ -86,6 +96,12 @@ func (f *FunctionType) String() string {
 	return fmt.Sprintf("(fn (%s))", params)
 }
 
+func (f *FunctionType) IsCopyable() bool {
+	// Not actually sure about this, but we could come back to it once function
+	// types are actually available to the user.
+	return true
+}
+
 func (s *StructType) Equals(t Type) bool {
 	if structType, ok := t.(*StructType); ok {
 		return s.Name == structType.Name
@@ -118,6 +134,16 @@ func (s *StructType) GetMember(name string) (*StructMember, bool) {
 	return nil, false
 }
 
+func (s *StructType) IsCopyable() bool {
+	for _, m := range s.Members {
+		if !m.Type.IsCopyable() {
+			return false
+		}
+	}
+
+	return true
+}
+
 func (p *PointerType) Equals(t Type) bool {
 	if ptrType, ok := t.(*PointerType); ok {
 		return p.ElType.Equals(ptrType.ElType)
@@ -130,6 +156,26 @@ func (p *PointerType) String() string {
 	return fmt.Sprintf("*%s", p.ElType.String())
 }
 
+func (p *PointerType) IsCopyable() bool {
+	return true
+}
+
+func (b *BoxType) Equals(t Type) bool {
+	if boxType, ok := t.(*BoxType); ok {
+		return b.ElType.Equals(boxType.ElType)
+	}
+
+	return false
+}
+
+func (b *BoxType) String() string {
+	return fmt.Sprintf("~%s", b.ElType.String())
+}
+
+func (b *BoxType) IsCopyable() bool {
+	return false
+}
+
 func (s *SliceType) Equals(t Type) bool {
 	if sliceType, ok := t.(*SliceType); ok {
 		return s.ElType.Equals(sliceType.ElType)
@@ -140,6 +186,10 @@ func (s *SliceType) Equals(t Type) bool {
 
 func (s *SliceType) String() string {
 	return fmt.Sprintf("[%s]", s.ElType.String())
+}
+
+func (s *SliceType) IsCopyable() bool {
+	return false
 }
 
 type Statement interface {

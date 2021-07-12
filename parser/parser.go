@@ -439,6 +439,8 @@ func parsePrimary(expectingBlock bool) ast.Expression {
 			LiteralType:  peek(-1).Type,
 			LiteralValue: peek(-1).Lexeme,
 		}
+	} else if peek(0).Type == lexer.LEFT_PAREN {
+		parseError(peek(0), "Grouping expressions are not yet supported.")
 	} else if peek(0).Type == lexer.LEFT_BRACKET {
 		lbtoken := peek(0)
 		current++
@@ -577,6 +579,11 @@ func parseType() ast.Type {
 	} else if peek(0).Type == lexer.STAR {
 		current++
 		return &ast.PointerType{
+			ElType: parseType(),
+		}
+	} else if peek(0).Type == lexer.TILDE {
+		current++
+		return &ast.BoxType{
 			ElType: parseType(),
 		}
 	} else if peek(0).Type == lexer.LEFT_BRACKET {

@@ -60,6 +60,7 @@ const (
 	CARET
 	AND
 	BANG
+	TILDE
 	INTERP_BEGIN
 	INTERP_END
 
@@ -239,6 +240,8 @@ func ScanToken() {
 		addToken(DOT, "")
 	case ':':
 		addToken(COLON, "")
+	case '~':
+		addToken(TILDE, "")
 	case '&':
 		if match('&') {
 			addToken(AND_AND, "")
