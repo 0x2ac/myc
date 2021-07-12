@@ -37,7 +37,8 @@ func isIdentifierPrimitive(ident lexer.Token) bool {
 
 func parseError(token lexer.Token, message string) {
 	log.Fatalf(
-		"[Parser Error: %d:%d] %s",
+		"%s\nparse-error: %d:%d: %s",
+		token.Pos.SourceContext(),
 		token.Pos.Line, token.Pos.Column, message,
 	)
 }

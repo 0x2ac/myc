@@ -3,6 +3,7 @@ package lexer
 import (
 	"fmt"
 	"log"
+	"strings"
 	"unicode"
 )
 
@@ -22,6 +23,51 @@ var Keywords = [...]string{
 type Pos struct {
 	Line   int
 	Column int
+}
+
+func (p *Pos) SourceContext() string {
+	source = strings.ReplaceAll(source, "\r\n", "\n")
+	sourceLines := strings.Split(source, "\n")
+	numLines := len(sourceLines)
+
+	var highlightChar byte = '^'
+	offsetHighlight := make([]byte, p.Column)
+
+	for i := 0; i < p.Column; i++ {
+		offsetHighlight[i] = ' '
+	}
+
+	offsetHighlight[p.Column-1] = highlightChar
+
+	if p.Line == 1 {
+		return fmt.Sprintf(`
+1 | %s
+    %s`,
+			sourceLines[p.Line-1],
+			string(offsetHighlight),
+		)
+	} else if p.Line == numLines-1 {
+		return fmt.Sprintf(`
+%d | %s
+%d | %s
+     %s`,
+			p.Line-1, sourceLines[p.Line-2],
+			p.Line, sourceLines[p.Line-1],
+			string(offsetHighlight),
+		)
+
+	} else {
+		return fmt.Sprintf(`
+%d | %s
+%d | %s
+     %s
+%d | %s`,
+			p.Line-1, sourceLines[p.Line-2],
+			p.Line, sourceLines[p.Line-1],
+			string(offsetHighlight),
+			p.Line+1, sourceLines[p.Line],
+		)
+	}
 }
 
 type TokenType int
@@ -95,7 +141,7 @@ type Token struct {
 }
 
 func lexError(line int, message string) {
-	log.Fatalf("[Lexer Error on line: %d] %s", line, message)
+	log.Fatalf("lex-error: %d: %s", line, message)
 }
 
 var (
@@ -132,6 +178,10 @@ func peek(distanceOptionalShim ...int) byte {
 
 	if len(distanceOptionalShim) > 0 {
 		distance = distanceOptionalShim[0]
+	}
+
+	if isAtEnd() {
+		lexError(line, "Unexpected end of file.")
 	}
 
 	return source[current+distance]

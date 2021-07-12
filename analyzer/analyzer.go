@@ -11,7 +11,8 @@ import (
 
 func analysisError(token lexer.Token, message string) {
 	log.Fatalf(
-		"[Analaysis Error: %d:%d]\n%s",
+		"%s\nanalysis-error: %d:%d: %s",
+		token.Pos.SourceContext(),
 		token.Pos.Line, token.Pos.Column, message,
 	)
 }
