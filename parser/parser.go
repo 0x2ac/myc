@@ -152,15 +152,6 @@ func parseStatement() ast.Statement {
 			Type:       typ,
 			Value:      expr,
 		}
-	} else if t.Type == lexer.CONST {
-		// ConstantDeclaration
-		current++
-		name := expect(lexer.IDENTIFIER, "Expect identifier after `const`.")
-		expr := parseExpression(false)
-		return &ast.ConstantDeclaration{
-			Identifier: name,
-			Value:      expr,
-		}
 	} else if t.Type == lexer.IF {
 		// IfStatement
 		current++
@@ -240,6 +231,7 @@ func parseStatement() ast.Statement {
 		expect(lexer.SEMICOLON, "Expect semicolon after print statement.")
 		return &ast.PrintStatement{
 			Expressions: exprs,
+			PrintToken:  t,
 		}
 	} else if t.Type == lexer.LEFT_BRACE {
 		// BlockStatement
@@ -436,7 +428,7 @@ func parsePrimary(expectingBlock bool) ast.Expression {
 		peek(0).Type == lexer.FALSE {
 		current++
 		expr = &ast.Literal{
-			LiteralType:  peek(-1).Type,
+			Token:        peek(-1),
 			LiteralValue: peek(-1).Lexeme,
 		}
 	} else if peek(0).Type == lexer.LEFT_PAREN {
@@ -486,9 +478,11 @@ func parsePrimary(expectingBlock bool) ast.Expression {
 			Value:    parsePrimary(false),
 		}
 	} else if peek(0).Type == lexer.AND {
+		andToken := peek(0)
 		current++
 		expr = &ast.ReferenceOf{
-			Target: parsePrimary(false),
+			Target:   parsePrimary(false),
+			AndToken: andToken,
 		}
 	}
 
@@ -549,7 +543,7 @@ func parsePrimary(expectingBlock bool) ast.Expression {
 			current++
 			expr = &ast.Dereference{
 				Expression: expr,
-				StarToken:  peek(-1),
+				CaretToken: peek(-1),
 			}
 		}
 	}

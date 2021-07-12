@@ -224,11 +224,6 @@ type VariableDeclaration struct {
 	Value      Expression
 }
 
-type ConstantDeclaration struct {
-	Identifier lexer.Token
-	Value      Expression
-}
-
 type IfStatement struct {
 	Condition        Expression
 	IfBlock          BlockStatement
@@ -254,6 +249,8 @@ type WhileStatement struct {
 
 type PrintStatement struct {
 	Expressions []Expression
+
+	PrintToken lexer.Token
 }
 
 type ReturnStatement struct {
@@ -273,7 +270,6 @@ type BlockStatement struct {
 func (*FunctionDeclaration) isStatement() {}
 func (*StructDeclaration) isStatement()   {}
 func (*VariableDeclaration) isStatement() {}
-func (*ConstantDeclaration) isStatement() {}
 func (*IfStatement) isStatement()         {}
 func (*WhileStatement) isStatement()      {}
 func (*PrintStatement) isStatement()      {}
@@ -284,6 +280,7 @@ func (*BlockStatement) isStatement()      {}
 type Expression interface {
 	isExpression()
 	Type() Type
+	ErrorToken() lexer.Token
 }
 
 type UnaryExpression struct {
@@ -353,18 +350,19 @@ type NamedInitializer struct {
 type ReferenceOf struct {
 	Target Expression
 
-	Typ Type
+	Typ      Type
+	AndToken lexer.Token
 }
 
 type Dereference struct {
 	Expression Expression
 
-	Typ       Type
-	StarToken lexer.Token
+	Typ        Type
+	CaretToken lexer.Token
 }
 
 type Literal struct {
-	LiteralType  lexer.TokenType
+	Token        lexer.Token
 	LiteralValue string
 
 	Typ Type
@@ -385,33 +383,87 @@ func (*Literal) isExpression()            {}
 func (u *UnaryExpression) Type() Type {
 	return u.Typ
 }
+
+func (u *UnaryExpression) ErrorToken() lexer.Token {
+	return u.Operator
+}
+
 func (b *BinaryExpression) Type() Type {
 	return b.Typ
 }
+
+func (b *BinaryExpression) ErrorToken() lexer.Token {
+	return b.Operator
+}
+
 func (v *VariableExpression) Type() Type {
 	return v.Typ
 }
+
+func (v *VariableExpression) ErrorToken() lexer.Token {
+	return v.Identifier
+}
+
 func (c *CallExpression) Type() Type {
 	return c.Typ
 }
+
+func (c *CallExpression) ErrorToken() lexer.Token {
+	return c.LeftParenToken
+}
+
 func (g *GetExpression) Type() Type {
 	return g.Typ
 }
-func (g *IndexExpression) Type() Type {
-	return g.Typ
+
+func (g *GetExpression) ErrorToken() lexer.Token {
+	return g.Identifier
 }
+
+func (i *IndexExpression) Type() Type {
+	return i.Typ
+}
+
+func (i *IndexExpression) ErrorToken() lexer.Token {
+	return i.LeftBracketToken
+}
+
 func (c *CompositeLiteral) Type() Type {
 	return c.Typ
 }
+
+func (c *CompositeLiteral) ErrorToken() lexer.Token {
+	return c.LeftBraceToken
+}
+
 func (s *SliceLiteral) Type() Type {
 	return s.Typ
 }
+
+func (s *SliceLiteral) ErrorToken() lexer.Token {
+	return s.LeftBracketToken
+}
+
 func (r *ReferenceOf) Type() Type {
 	return r.Typ
 }
+
+func (r *ReferenceOf) ErrorToken() lexer.Token {
+	return r.AndToken
+}
+
 func (r *Dereference) Type() Type {
 	return r.Typ
 }
+
+func (d *Dereference) ErrorToken() lexer.Token {
+	return d.CaretToken
+}
+
 func (l *Literal) Type() Type {
 	return l.Typ
+}
+
+func (l *Literal) ErrorToken() lexer.Token {
+	return l.Token
 }

@@ -8,7 +8,6 @@ import (
 
 var Keywords = [...]string{
 	"var",
-	"const",
 	"print",
 	"fun",
 	"return",
@@ -36,7 +35,6 @@ const (
 
 	keyword_begin
 	VAR
-	CONST
 	PRINT
 	FUN
 	RETURN

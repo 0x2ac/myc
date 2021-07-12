@@ -40,6 +40,8 @@ func genType(t ast.Type) types.Type {
 		return typespace[t.(*ast.StructType).Name]
 	case *ast.PointerType:
 		return types.NewPointer(genType(t.(*ast.PointerType).ElType))
+	case *ast.BoxType:
+		return types.NewPointer(genType(t.(*ast.BoxType).ElType))
 	}
 
 	panic("Type node has invalid static type.")
@@ -221,6 +223,9 @@ func genStatement(stmt ast.Statement) {
 		for _, stmt := range s.Block.Statements {
 			genStatement(stmt)
 		}
+		if s.ReturnType == nil {
+			block.NewRet(nil)
+		}
 		block = oldBlock
 
 		for _, param := range s.Parameters {
@@ -229,21 +234,26 @@ func genStatement(stmt ast.Statement) {
 				namespace[param.Identifier.Lexeme] = oldVal
 			}
 		}
-
-		if funBlock.Term == nil {
-			funBlock.NewRet(nil)
-		}
 	case *ast.VariableDeclaration:
 		s := stmt.(*ast.VariableDeclaration)
 		variable := block.NewAlloca(genType(s.Type))
-		block.NewStore(genExpression(s.Value), variable)
-		//                           ^^^^^^^
-		// TODO: Need assure that this is 0-value intialized based on the type.
-		namespace[s.Identifier.Lexeme] = variable
-	case *ast.ConstantDeclaration:
-		s := stmt.(*ast.ConstantDeclaration)
-		variable := block.NewAlloca(genType(s.Value.Type()))
-		block.NewStore(genExpression(s.Value), variable)
+
+		// TODO: Need assure that if s.Value == nil we have to 0-initialize the variable.
+
+		if s.Value != nil {
+			_, variableIsBox := s.Type.(*ast.BoxType)
+			_, valueIsBox := s.Value.Type().(*ast.BoxType)
+
+			if variableIsBox && !valueIsBox {
+				// TODO: heap allocate this
+				tmp := block.NewAlloca(genType(s.Value.Type()))
+				block.NewStore(genExpression(s.Value), tmp)
+				block.NewStore(tmp, variable)
+			} else {
+				block.NewStore(genExpression(s.Value), variable)
+			}
+		}
+
 		namespace[s.Identifier.Lexeme] = variable
 	case *ast.IfStatement:
 		s := stmt.(*ast.IfStatement)
@@ -342,20 +352,33 @@ func genExpression(expr ast.Expression) value.Value {
 		e := expr.(*ast.BinaryExpression)
 		switch e.Operator.Type {
 		case lexer.EQUAL:
-			// If assigning to a dereference we generate it's nested expression instead.
+			_, targetIsBox := e.Left.Type().(*ast.BoxType)
+			_, valueIsBox := e.Right.Type().(*ast.BoxType)
+
+			var target value.Value
+
 			if deref, ok := e.Left.(*ast.Dereference); ok {
-				block.NewStore(genExpression(e.Right), genExpression(deref.Expression))
-				return block.NewLoad(genType(e.Left.Type()), genExpression(deref.Expression))
+				// If assigning to a dereference we generate it's nested expression instead.
+				target = genExpression(deref.Expression)
 			} else {
 				expr := genExpression(e.Left)
 				if load, ok := expr.(*ir.InstLoad); ok {
-					block.NewStore(genExpression(e.Right), load.Src)
-					return block.NewLoad(load.Type(), load.Src)
+					target = load.Src
 				} else {
-					block.NewStore(genExpression(e.Right), expr)
-					return block.NewLoad(expr.Type(), expr)
+					target = expr
 				}
 			}
+
+			if targetIsBox && !valueIsBox {
+				// TODO: heap allocate this
+				tmp := block.NewAlloca(genType(e.Right.Type()))
+				block.NewStore(genExpression(e.Right), tmp)
+				block.NewStore(tmp, target)
+			} else {
+				block.NewStore(genExpression(e.Right), target)
+			}
+
+			return block.NewLoad(target.Type(), target)
 		case lexer.PLUS:
 			if e.Left.Type().Equals(&ast.Primitive{Name: "float"}) {
 				return block.NewFAdd(genExpression(e.Left), genExpression(e.Right))
@@ -495,8 +518,25 @@ func genExpression(expr ast.Expression) value.Value {
 	case *ast.CallExpression:
 		e := expr.(*ast.CallExpression)
 		args := []value.Value{}
-		for _, arg := range e.Arguments {
-			args = append(args, genExpression(arg))
+		for i, arg := range e.Arguments {
+			_, paramIsBox := e.Callee.Type().(*ast.FunctionType).Parameters[i].(*ast.BoxType)
+			_, argIsBox := arg.Type().(*ast.BoxType)
+
+			if paramIsBox && !argIsBox {
+				// Assigning an unboxed value to a box. Example:
+				//
+				//     fun printBox(b ~int) {
+				//         print b
+				//     }
+				//     printBox(56) // we are genning this
+				//
+				// TODO: heap allocate here
+				tmp := block.NewAlloca(genType(arg.Type()))
+				block.NewStore(genExpression(arg), tmp)
+				args = append(args, tmp)
+			} else {
+				args = append(args, genExpression(arg))
+			}
 		}
 
 		var callee value.Value
@@ -604,25 +644,42 @@ func genExpression(expr ast.Expression) value.Value {
 
 		local := block.NewAlloca(t)
 
+		var initializers []ast.Expression
+		initializers = make([]ast.Expression, len(st.Members))
+
 		if e.NamedInitializers != nil {
-			for i, initializer := range *e.NamedInitializers {
-				tmp := block.NewGetElementPtr(
-					t,
-					local,
-					constant.NewInt(types.I32, int64(0)),
-					constant.NewInt(types.I32, int64(i)),
-				)
-				block.NewStore(genExpression(initializer.Value), tmp)
+			for _, init := range *e.NamedInitializers {
+				memberIndex := -1
+				for i, m := range st.Members {
+					if m.Identifier.Lexeme == (*e.NamedInitializers)[i].Identifier.Lexeme {
+						memberIndex = i
+					}
+				}
+
+				initializers[memberIndex] = init.Value
 			}
 		} else {
-			for i, initializer := range *e.UnnamedInitializers {
-				tmp := block.NewGetElementPtr(
-					t,
-					local,
-					constant.NewInt(types.I32, int64(0)),
-					constant.NewInt(types.I32, int64(i)),
-				)
-				block.NewStore(genExpression(initializer), tmp)
+			initializers = *e.UnnamedInitializers
+		}
+
+		for i, init := range initializers {
+			tmp := block.NewGetElementPtr(
+				t,
+				local,
+				constant.NewInt(types.I32, int64(0)),
+				constant.NewInt(types.I32, int64(i)),
+			)
+
+			_, memberIsBox := st.Members[i].Type.(*ast.BoxType)
+			boxType, initIsBox := init.Type().(*ast.BoxType)
+
+			if memberIsBox && !initIsBox {
+				// TODO: heap allocate here as well
+				ptr := block.NewAlloca(genType(boxType.ElType))
+				block.NewStore(genExpression(init), ptr)
+				block.NewStore(ptr, tmp)
+			} else {
+				block.NewStore(genExpression(init), tmp)
 			}
 		}
 
@@ -631,6 +688,7 @@ func genExpression(expr ast.Expression) value.Value {
 		e := expr.(*ast.SliceLiteral)
 		local := block.NewAlloca(genType(e.Type()))
 		eltype := e.Type().(*ast.SliceType).ElType
+		_, elTypeIsBox := eltype.(*ast.BoxType)
 
 		buffer := block.NewGetElementPtr(
 			genType(e.Type()),
@@ -667,9 +725,19 @@ func genExpression(expr ast.Expression) value.Value {
 		block.NewStore(ptrmem, buffer)
 
 		for i, value := range e.Expressions {
+			boxType, valueIsBox := value.Type().(*ast.BoxType)
+
 			loadedBuffer := block.NewLoad(types.NewPointer(genType(eltype)), buffer)
 			pointerToElement := block.NewGetElementPtr(genType(eltype), loadedBuffer, constant.NewInt(types.I64, int64(i)))
-			block.NewStore(genExpression(value), pointerToElement)
+
+			if elTypeIsBox && !valueIsBox {
+				// TODO: heap allocate this
+				tmp := block.NewAlloca(genType(boxType.ElType))
+				block.NewStore(genExpression(value), tmp)
+				block.NewStore(tmp, pointerToElement)
+			} else {
+				block.NewStore(genExpression(value), pointerToElement)
+			}
 		}
 
 		return block.NewLoad(genType(e.Type()), local)
@@ -687,7 +755,7 @@ func genExpression(expr ast.Expression) value.Value {
 		return block.NewLoad(genType(e.Type()), genExpression(e.Expression))
 	case *ast.Literal:
 		e := expr.(*ast.Literal)
-		switch e.LiteralType {
+		switch e.Token.Type {
 		case lexer.STRING:
 			rawStr := e.LiteralValue + "\x00"
 			strDef := module.NewGlobalDef("", constant.NewCharArrayFromString(rawStr))

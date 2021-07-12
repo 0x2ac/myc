@@ -33,8 +33,6 @@ func genStatement(stmt ast.Statement) string {
 		return genFunctionDeclaration(stmt.(*ast.FunctionDeclaration))
 	case *ast.VariableDeclaration:
 		return genVariableDeclaration(stmt.(*ast.VariableDeclaration))
-	case *ast.ConstantDeclaration:
-		return genConstantDeclaration(stmt.(*ast.ConstantDeclaration))
 	case *ast.IfStatement:
 		return genIfStatement(stmt.(*ast.IfStatement))
 	case *ast.WhileStatement:
@@ -102,15 +100,6 @@ func genVariableDeclaration(decl *ast.VariableDeclaration) string {
 	return fmt.Sprintf(
 		"%s %s = %s;",
 		genType(decl.Type),
-		decl.Identifier.Lexeme,
-		genExpression(decl.Value),
-	)
-}
-
-func genConstantDeclaration(decl *ast.ConstantDeclaration) string {
-	return fmt.Sprintf(
-		"const %s %s = %s;",
-		genType(decl.Value.Type()),
 		decl.Identifier.Lexeme,
 		genExpression(decl.Value),
 	)

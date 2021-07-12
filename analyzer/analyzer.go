@@ -462,7 +462,7 @@ func analyzeExpression(expr ast.Expression) {
 			e.Typ = boxType.ElType
 		} else {
 			analysisError(
-				e.StarToken,
+				e.CaretToken,
 				fmt.Sprintf(
 					"Dereference of non-pointer type: '%s'",
 					e.Expression.Type().String(),
@@ -472,7 +472,7 @@ func analyzeExpression(expr ast.Expression) {
 
 	case *ast.Literal:
 		e := expr.(*ast.Literal)
-		switch e.LiteralType {
+		switch e.Token.Type {
 		case lexer.STRING:
 			e.Typ = &ast.Primitive{Name: "str"}
 		case lexer.INT:
@@ -487,18 +487,27 @@ func analyzeExpression(expr ast.Expression) {
 	}
 }
 
-// Global used to track what expressions are valid return values.
-var functionScope *ast.FunctionDeclaration
+var (
+	// Global used to track what expressions are valid return values.
+	functionScope *ast.FunctionDeclaration
 
-// Tracks whether the current function has a valid return statement.
-var hasValidReturn bool
+	// Tracks whether the current function has a valid return statement.
+	hasValidReturn bool
+
+	// Track whether we are within a function or not
+	isTopLevel = true
+)
 
 func analyzeStatement(statement ast.Statement) {
 	switch statement.(type) {
 	case *ast.FunctionDeclaration:
-		oldFunctionScope := functionScope
-
 		s := statement.(*ast.FunctionDeclaration)
+
+		if !isTopLevel {
+			analysisError(s.Identifier, "Nested functions are not yet supported.")
+		}
+
+		oldFunctionScope := functionScope
 		functionScope = s
 
 		onlyTypeParams := []ast.Type{}
@@ -521,6 +530,7 @@ func analyzeStatement(statement ast.Statement) {
 
 		oldScope := namespace // copy the old scope
 		namespace = NewSymbolTableFromEnclosing(namespace)
+		isTopLevel = false
 
 		for _, param := range s.Parameters {
 			namespace.shadow(param.Identifier.Lexeme, param.Type)
@@ -532,6 +542,7 @@ func analyzeStatement(statement ast.Statement) {
 
 		namespace = oldScope
 		functionScope = oldFunctionScope
+		isTopLevel = true
 
 		if !hasValidReturn && s.ReturnType != nil {
 			analysisError(
@@ -552,6 +563,8 @@ func analyzeStatement(statement ast.Statement) {
 				}
 
 				resolveStructType(st)
+			} else if _, ok := m.Type.(*ast.PointerType); ok {
+				analysisError(m.Identifier, "Cannot use pointer as struct field.\n  help: try using a box instead.")
 			}
 		}
 
@@ -567,6 +580,10 @@ func analyzeStatement(statement ast.Statement) {
 		}
 	case *ast.VariableDeclaration:
 		s := statement.(*ast.VariableDeclaration)
+
+		if isTopLevel {
+			analysisError(s.Identifier, "Global variables are not supported. Variables must be enclosed in a function's scope.")
+		}
 
 		if s.Value != nil {
 			analyzeExpression(s.Value)
@@ -603,21 +620,13 @@ func analyzeStatement(statement ast.Statement) {
 		if err != nil {
 			analysisError(s.Identifier, err.Error())
 		}
-	case *ast.ConstantDeclaration:
-		s := statement.(*ast.ConstantDeclaration)
-		analyzeExpression(s.Value)
-
-		// e.g. const foo = []
-		if sliceLit, ok := s.Value.(*ast.SliceLiteral); ok && len(sliceLit.Expressions) == 0 {
-			analysisError(s.Identifier, "Cannot declare constant with 0 element slice literal.")
-		}
-
-		err := namespace.declare(s.Identifier.Lexeme, s.Value.Type())
-		if err != nil {
-			analysisError(s.Identifier, err.Error())
-		}
 	case *ast.IfStatement:
 		s := statement.(*ast.IfStatement)
+
+		if isTopLevel {
+			analysisError(s.IfToken, "If statement cannot be top level.")
+		}
+
 		analyzeExpression(s.Condition)
 		if p, ok := s.Condition.Type().(*ast.Primitive); !ok || p.Name != "bool" {
 			analysisError(
@@ -651,6 +660,11 @@ func analyzeStatement(statement ast.Statement) {
 		}
 	case *ast.WhileStatement:
 		s := statement.(*ast.WhileStatement)
+
+		if isTopLevel {
+			analysisError(s.WhileToken, "While statement cannot be top level.")
+		}
+
 		analyzeExpression(s.Condition)
 		if p, ok := s.Condition.Type().(*ast.Primitive); !ok || p.Name != "bool" {
 			analysisError(
@@ -664,11 +678,20 @@ func analyzeStatement(statement ast.Statement) {
 		analyzeStatement(&s.Block)
 	case *ast.PrintStatement:
 		s := statement.(*ast.PrintStatement)
+
+		if isTopLevel {
+			analysisError(s.PrintToken, "While statement cannot be top level.")
+		}
+
 		for _, expr := range s.Expressions {
 			analyzeExpression(expr)
 		}
 	case *ast.ReturnStatement:
 		s := statement.(*ast.ReturnStatement)
+
+		if isTopLevel {
+			analysisError(s.ReturnToken, "Return statement outside function.")
+		}
 
 		if s.Expression != nil {
 			analyzeExpression(s.Expression)
@@ -700,6 +723,11 @@ func analyzeStatement(statement ast.Statement) {
 		hasValidReturn = true
 	case *ast.ExpressionStatement:
 		s := statement.(*ast.ExpressionStatement)
+
+		if isTopLevel {
+			analysisError(s.Expression.ErrorToken(), "Expression statement cannot be top level.")
+		}
+
 		analyzeExpression(s.Expression)
 	case *ast.BlockStatement:
 		oldScope := namespace // copy the old scope
