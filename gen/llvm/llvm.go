@@ -13,6 +13,32 @@ import (
 	"github.com/llir/llvm/ir/value"
 )
 
+var (
+	module                    *ir.Module
+	block                     *ir.Block
+	currentFunctionsDropBlock *ir.Block
+
+	panicDeclaration   *ir.Func
+	putcharDeclaration *ir.Func
+	printfDeclaration  *ir.Func
+	memcpyDeclaration  *ir.Func
+	mallocDeclaration  *ir.Func
+	freeDeclaration    *ir.Func
+
+	namespace = make(map[string]value.Value)
+	typespace = make(map[string]types.Type)
+)
+
+func genSizeOf(t ast.Type) value.Value {
+	// Based on this SO answer: https://stackoverflow.com/a/30830445/12785202
+	gep := block.NewGetElementPtr(
+		genType(t),
+		constant.NewNull(types.NewPointer(genType(t))),
+		constant.NewInt(types.I32, 1),
+	)
+	return block.NewPtrToInt(gep, types.I64)
+}
+
 func genType(t ast.Type) types.Type {
 	switch t.(type) {
 	case *ast.Primitive:
@@ -21,27 +47,20 @@ func genType(t ast.Type) types.Type {
 		st := t.(*ast.SliceType)
 		// { buffer *ElType, length i64, capacity i64 }
 		typ := types.NewStruct(types.NewPointer(genType(st.ElType)), types.I64, types.I64)
-
-		printFuncName := fmt.Sprintf("myc__slice_%s_print", getTypeName(st.ElType))
-		printFuncExists := false
-
-		for _, f := range module.Funcs {
-			if f.Name() == printFuncName {
-				printFuncExists = true
-			}
-		}
-
-		if !printFuncExists {
-			createSlicePrint(st.ElType, typ)
-		}
-
+		ensureSlicePrint(st, typ)
+		ensureSliceDrop(st, typ)
 		return typ
 	case *ast.StructType:
 		return typespace[t.(*ast.StructType).Name]
 	case *ast.PointerType:
-		return types.NewPointer(genType(t.(*ast.PointerType).ElType))
+		typ := types.NewPointer(genType(t.(*ast.PointerType).ElType))
+		ensureBoxOrPtrPrint(t, typ)
+		return typ
 	case *ast.BoxType:
-		return types.NewPointer(genType(t.(*ast.BoxType).ElType))
+		typ := types.NewPointer(genType(t.(*ast.BoxType).ElType))
+		ensureBoxOrPtrPrint(t, typ)
+		ensureBoxDrop(t.(*ast.BoxType), typ)
+		return typ
 	}
 
 	panic("Type node has invalid static type.")
@@ -50,7 +69,8 @@ func genType(t ast.Type) types.Type {
 func genPrimitive(primitive *ast.Primitive) types.Type {
 	switch primitive.Name {
 	case "str":
-		return types.NewStruct(types.I8Ptr, types.I64)
+		// {buffer *i8, length i64, isHeap bool}
+		return types.NewStruct(types.I8Ptr, types.I64, types.I1)
 	case "int":
 		return types.I32
 	case "float":
@@ -62,20 +82,6 @@ func genPrimitive(primitive *ast.Primitive) types.Type {
 	panic("Invalid primitive type.")
 }
 
-var (
-	module *ir.Module
-	block  *ir.Block
-
-	panicDeclaration   *ir.Func
-	putcharDeclaration *ir.Func
-	printfDeclaration  *ir.Func
-	memcpyDeclaration  *ir.Func
-	mallocDeclaration  *ir.Func
-
-	namespace = make(map[string]value.Value)
-	typespace = make(map[string]types.Type)
-)
-
 func getTypeName(t ast.Type) string {
 	if p, ok := t.(*ast.Primitive); ok {
 		return p.Name
@@ -83,6 +89,10 @@ func getTypeName(t ast.Type) string {
 		return s.Name
 	} else if st, ok := t.(*ast.SliceType); ok {
 		return fmt.Sprintf("slice_%s", getTypeName(st.ElType))
+	} else if p, ok := t.(*ast.PointerType); ok {
+		return fmt.Sprintf("ptr_%s", getTypeName(p.ElType))
+	} else if b, ok := t.(*ast.BoxType); ok {
+		return fmt.Sprintf("box_%s", getTypeName(b.ElType))
 	}
 
 	panic("Invalid type passed to `getTypeName`.")
@@ -100,6 +110,18 @@ func getPrintFuncForType(t ast.Type) *ir.Func {
 	panic(fmt.Sprintf("Could not find print function for type: '%s'.", t.String()))
 }
 
+func getDropFunc(t ast.Type) *ir.Func {
+	expectedName := fmt.Sprintf("myc__%s_drop", getTypeName(t))
+
+	for _, f := range module.Funcs {
+		if f.Name() == expectedName {
+			return f
+		}
+	}
+
+	panic(fmt.Sprintf("Could not find drop function for type: '%s'.", t.String()))
+}
+
 func genStatement(stmt ast.Statement) {
 	switch stmt.(type) {
 	case *ast.StructDeclaration:
@@ -113,73 +135,9 @@ func genStatement(stmt ast.Statement) {
 		t := types.NewStruct(fields...)
 		typespace[s.Identifier.Lexeme] = t
 
-		selfParam := ir.NewParam("", types.NewPointer(t))
-		structPrintFunction := module.NewFunc(fmt.Sprintf("myc__%s_print", s.Identifier.Lexeme), types.Void, selfParam)
-		printBlock := structPrintFunction.NewBlock("")
-
-		initString := fmt.Sprintf("%s{\x00", s.Identifier.Lexeme)
-		initStringDef := module.NewGlobalDef("", constant.NewCharArrayFromString(initString))
-		printBlock.NewCall(printfDeclaration, constant.NewGetElementPtr(
-			types.NewArray(uint64(len(initString)), types.I8),
-			initStringDef,
-			constant.NewInt(types.I32, 0),
-			constant.NewInt(types.I32, 0),
-		))
-
-		colonSpace := ": \x00"
-		colonSpaceDef := module.NewGlobalDef("", constant.NewCharArrayFromString(colonSpace))
-
-		commaSpace := ", \x00"
-		commaSpaceDef := module.NewGlobalDef("", constant.NewCharArrayFromString(commaSpace))
-
-		for i, m := range s.Members {
-			fieldString := fmt.Sprintf("%s\x00", m.Identifier.Lexeme)
-			fieldStringDef := module.NewGlobalDef("", constant.NewCharArrayFromString(fieldString))
-			printBlock.NewCall(printfDeclaration, constant.NewGetElementPtr(
-				types.NewArray(uint64(len(fieldString)), types.I8),
-				fieldStringDef,
-				constant.NewInt(types.I32, 0),
-				constant.NewInt(types.I32, 0),
-			))
-			printBlock.NewCall(printfDeclaration, constant.NewGetElementPtr(
-				types.NewArray(uint64(len(colonSpace)), types.I8),
-				colonSpaceDef,
-				constant.NewInt(types.I32, 0),
-				constant.NewInt(types.I32, 0),
-			))
-
-			member := printBlock.NewGetElementPtr(t, selfParam,
-				constant.NewInt(types.I32, 0),
-				constant.NewInt(types.I32, int64(i)),
-			)
-			loadedMember := printBlock.NewLoad(genType(m.Type), member)
-
-			if _, ok := loadedMember.Type().(*types.StructType); ok {
-				printBlock.NewCall(getPrintFuncForType(m.Type), loadedMember.Src)
-			} else {
-				printBlock.NewCall(getPrintFuncForType(m.Type), loadedMember)
-			}
-
-			if i != len(s.Members)-1 {
-				printBlock.NewCall(printfDeclaration, constant.NewGetElementPtr(
-					types.NewArray(uint64(len(commaSpace)), types.I8),
-					commaSpaceDef,
-					constant.NewInt(types.I32, 0),
-					constant.NewInt(types.I32, 0),
-				))
-			}
-		}
-
-		closeString := "}\x00"
-		closeStringDef := module.NewGlobalDef("", constant.NewCharArrayFromString(closeString))
-		printBlock.NewCall(printfDeclaration, constant.NewGetElementPtr(
-			types.NewArray(uint64(len(closeString)), types.I8),
-			closeStringDef,
-			constant.NewInt(types.I32, 0),
-			constant.NewInt(types.I32, 0),
-		))
-
-		printBlock.NewRet(nil)
+		st := ast.StructType{Name: s.Identifier.Lexeme, Members: s.Members}
+		createStructPrint(&st)
+		createStructDrop(&st)
 	case *ast.FunctionDeclaration:
 		s := stmt.(*ast.FunctionDeclaration)
 		irParams := []*ir.Param{}
@@ -195,7 +153,9 @@ func genStatement(stmt ast.Statement) {
 		}
 
 		var retTyp types.Type
-		if s.ReturnType == nil {
+		if s.Identifier.Lexeme == "main" {
+			retTyp = types.I32
+		} else if s.ReturnType == nil {
 			retTyp = types.Void
 		} else {
 			retTyp = genType(s.ReturnType)
@@ -218,15 +178,40 @@ func genStatement(stmt ast.Statement) {
 			namespace[param.Identifier.Lexeme] = variable
 		}
 
-		oldBlock := block
+		var varDecls []*ast.VariableDeclaration
+
 		block = funBlock
+
+		currentFunctionsDropBlock = block.Parent.NewBlock("drops")
+
 		for _, stmt := range s.Block.Statements {
+			if v, ok := stmt.(*ast.VariableDeclaration); ok {
+				varDecls = append(varDecls, v)
+			}
+
 			genStatement(stmt)
 		}
-		if s.ReturnType == nil {
-			block.NewRet(nil)
+
+		for _, v := range varDecls {
+			if !v.Type.IsCopyable() {
+				variable := namespace[v.Identifier.Lexeme]
+				currentFunctionsDropBlock.NewCall(getDropFunc(v.Type), variable)
+			}
 		}
-		block = oldBlock
+
+		if s.Identifier.Lexeme == "main" || s.ReturnType == nil {
+			returnBlock := block.Parent.NewBlock("")
+			if s.Identifier.Lexeme == "main" {
+				returnBlock.NewRet(constant.NewInt(types.I32, 0))
+			} else if s.ReturnType == nil {
+				returnBlock.NewRet(nil)
+			}
+			currentFunctionsDropBlock.NewBr(returnBlock)
+			block.NewBr(currentFunctionsDropBlock)
+		}
+
+		block = nil
+		currentFunctionsDropBlock = nil
 
 		for _, param := range s.Parameters {
 			delete(namespace, param.Identifier.Lexeme)
@@ -245,10 +230,10 @@ func genStatement(stmt ast.Statement) {
 			_, valueIsBox := s.Value.Type().(*ast.BoxType)
 
 			if variableIsBox && !valueIsBox {
-				// TODO: heap allocate this
-				tmp := block.NewAlloca(genType(s.Value.Type()))
-				block.NewStore(genExpression(s.Value), tmp)
-				block.NewStore(tmp, variable)
+				heapPtr := block.NewCall(mallocDeclaration, genSizeOf(s.Value.Type()))
+				casted := block.NewBitCast(heapPtr, genType(s.Type))
+				block.NewStore(genExpression(s.Value), casted)
+				block.NewStore(casted, variable)
 			} else {
 				block.NewStore(genExpression(s.Value), variable)
 			}
@@ -328,7 +313,25 @@ func genStatement(stmt ast.Statement) {
 		))
 	case *ast.ReturnStatement:
 		s := stmt.(*ast.ReturnStatement)
-		block.NewRet(genExpression(s.Expression))
+
+		_, shouldReturnBox := block.Parent.Sig.RetType.(*types.PointerType)
+		_, retvalIsBox := s.Expression.Type().(*ast.BoxType)
+
+		var retval value.Value
+
+		if shouldReturnBox && !retvalIsBox {
+			heapPtr := block.NewCall(mallocDeclaration, genSizeOf(s.Expression.Type()))
+			casted := block.NewBitCast(heapPtr, block.Parent.Sig.RetType)
+			block.NewStore(genExpression(s.Expression), casted)
+			retval = casted
+		} else {
+			retval = genExpression(s.Expression)
+		}
+
+		returnBlock := block.Parent.NewBlock("")
+		returnBlock.NewRet(retval)
+		currentFunctionsDropBlock.NewBr(returnBlock)
+		block.NewBr(currentFunctionsDropBlock)
 	case *ast.ExpressionStatement:
 		s := stmt.(*ast.ExpressionStatement)
 		genExpression(s.Expression)
@@ -370,15 +373,21 @@ func genExpression(expr ast.Expression) value.Value {
 			}
 
 			if targetIsBox && !valueIsBox {
-				// TODO: heap allocate this
-				tmp := block.NewAlloca(genType(e.Right.Type()))
-				block.NewStore(genExpression(e.Right), tmp)
-				block.NewStore(tmp, target)
+				// We dereference the heap pointer and copy the value instead
+				loadedTarget := block.NewLoad(genType(e.Left.Type()), target)
+				block.NewStore(genExpression(e.Right), loadedTarget)
+			} else if !e.Left.Type().IsCopyable() {
+				// No-copy types can only have rvalues aassigned to them
+				// We can assume that the rhs will create a new heap-based value
+				// which we can copy into the lhs. This means we can free the lhs'
+				// value.
+				block.NewCall(getDropFunc(e.Left.Type()), target)
+				block.NewStore(genExpression(e.Right), target)
 			} else {
 				block.NewStore(genExpression(e.Right), target)
 			}
 
-			return block.NewLoad(target.Type(), target)
+			return block.NewLoad(genType(e.Left.Type()), target)
 		case lexer.PLUS:
 			if e.Left.Type().Equals(&ast.Primitive{Name: "float"}) {
 				return block.NewFAdd(genExpression(e.Left), genExpression(e.Right))
@@ -416,7 +425,7 @@ func genExpression(expr ast.Expression) value.Value {
 					constant.NewInt(types.I32, 1),
 				)
 				rightLengthPtr := block.NewGetElementPtr(
-					genType(e.Type()), left,
+					genType(e.Type()), right,
 					constant.NewInt(types.I32, 0),
 					constant.NewInt(types.I32, 1),
 				)
@@ -433,11 +442,17 @@ func genExpression(expr ast.Expression) value.Value {
 					constant.NewInt(types.I32, 0),
 					constant.NewInt(types.I32, 1),
 				)
+				newIsHeap := block.NewGetElementPtr(
+					genType(e.Type()), newStr,
+					constant.NewInt(types.I32, 0),
+					constant.NewInt(types.I32, 2),
+				)
 
-				totalLength := block.NewAdd(block.NewAdd(leftLength, rightLength), constant.NewInt(types.I64, 1))
+				totalLength := block.NewAdd(leftLength, rightLength)
 				block.NewStore(totalLength, newLength)
 
 				block.NewStore(block.NewCall(mallocDeclaration, totalLength), newBufferPtr)
+				block.NewStore(constant.True, newIsHeap)
 
 				newBuffer := block.NewLoad(types.I8Ptr, newBufferPtr)
 				newBufferOffsetByLeft := block.NewGetElementPtr(types.I8, newBuffer, leftLength)
@@ -519,9 +534,10 @@ func genExpression(expr ast.Expression) value.Value {
 		e := expr.(*ast.CallExpression)
 		args := []value.Value{}
 		for i, arg := range e.Arguments {
-			_, paramIsBox := e.Callee.Type().(*ast.FunctionType).Parameters[i].(*ast.BoxType)
+			paramBoxType, paramIsBox := e.Callee.Type().(*ast.FunctionType).Parameters[i].(*ast.BoxType)
 			_, argIsBox := arg.Type().(*ast.BoxType)
 
+			// TODO: also need to handle a no-copy rvalue
 			if paramIsBox && !argIsBox {
 				// Assigning an unboxed value to a box. Example:
 				//
@@ -530,10 +546,9 @@ func genExpression(expr ast.Expression) value.Value {
 				//     }
 				//     printBox(56) // we are genning this
 				//
-				// TODO: heap allocate here
-				tmp := block.NewAlloca(genType(arg.Type()))
-				block.NewStore(genExpression(arg), tmp)
-				args = append(args, tmp)
+				temporaryBox := block.NewCall(mallocDeclaration, genSizeOf(arg.Type()))
+				args = append(args, block.NewBitCast(temporaryBox, genType(paramBoxType)))
+				currentFunctionsDropBlock.NewCall(getDropFunc(paramBoxType), temporaryBox)
 			} else {
 				args = append(args, genExpression(arg))
 			}
@@ -670,14 +685,14 @@ func genExpression(expr ast.Expression) value.Value {
 				constant.NewInt(types.I32, int64(i)),
 			)
 
-			_, memberIsBox := st.Members[i].Type.(*ast.BoxType)
-			boxType, initIsBox := init.Type().(*ast.BoxType)
+			boxType, memberIsBox := st.Members[i].Type.(*ast.BoxType)
+			_, initIsBox := init.Type().(*ast.BoxType)
 
 			if memberIsBox && !initIsBox {
-				// TODO: heap allocate here as well
-				ptr := block.NewAlloca(genType(boxType.ElType))
-				block.NewStore(genExpression(init), ptr)
-				block.NewStore(ptr, tmp)
+				box := block.NewCall(mallocDeclaration, genSizeOf(boxType.ElType))
+				casted := block.NewBitCast(box, genType(boxType))
+				block.NewStore(genExpression(init), casted)
+				block.NewStore(casted, tmp)
 			} else {
 				block.NewStore(genExpression(init), tmp)
 			}
@@ -688,7 +703,7 @@ func genExpression(expr ast.Expression) value.Value {
 		e := expr.(*ast.SliceLiteral)
 		local := block.NewAlloca(genType(e.Type()))
 		eltype := e.Type().(*ast.SliceType).ElType
-		_, elTypeIsBox := eltype.(*ast.BoxType)
+		elBoxType, elTypeIsBox := eltype.(*ast.BoxType)
 
 		buffer := block.NewGetElementPtr(
 			genType(e.Type()),
@@ -711,30 +726,28 @@ func genExpression(expr ast.Expression) value.Value {
 			constant.NewInt(types.I32, int64(2)),
 		)
 
-		ptrmem := block.NewAlloca(genType(e.Type().(*ast.SliceType).ElType))
 		block.NewStore(constant.NewInt(types.I64, int64(len(e.Expressions))), length)
-
 		if len(e.Expressions) == 0 {
 			block.NewStore(constant.NewInt(types.I64, 8), capacity)
-			ptrmem.NElems = constant.NewInt(types.I32, 8)
 		} else {
 			block.NewStore(constant.NewInt(types.I64, int64(len(e.Expressions))), capacity)
-			ptrmem.NElems = constant.NewInt(types.I32, int64(len(e.Expressions)))
 		}
 
-		block.NewStore(ptrmem, buffer)
+		ptrmem := block.NewCall(mallocDeclaration, block.NewMul(
+			genSizeOf(eltype), block.NewLoad(types.I64, capacity),
+		))
+		casted := block.NewBitCast(ptrmem, types.NewPointer(genType(eltype)))
+		block.NewStore(casted, buffer)
 
 		for i, value := range e.Expressions {
-			boxType, valueIsBox := value.Type().(*ast.BoxType)
+			_, valueIsBox := value.Type().(*ast.BoxType)
 
 			loadedBuffer := block.NewLoad(types.NewPointer(genType(eltype)), buffer)
 			pointerToElement := block.NewGetElementPtr(genType(eltype), loadedBuffer, constant.NewInt(types.I64, int64(i)))
 
 			if elTypeIsBox && !valueIsBox {
-				// TODO: heap allocate this
-				tmp := block.NewAlloca(genType(boxType.ElType))
-				block.NewStore(genExpression(value), tmp)
-				block.NewStore(tmp, pointerToElement)
+				temporaryBox := block.NewCall(mallocDeclaration, genSizeOf(value.Type()))
+				block.NewStore(block.NewBitCast(temporaryBox, genType(elBoxType)), pointerToElement)
 			} else {
 				block.NewStore(genExpression(value), pointerToElement)
 			}
@@ -770,7 +783,13 @@ func genExpression(expr ast.Expression) value.Value {
 				constant.NewInt(types.I32, 0),
 				constant.NewInt(types.I32, 1),
 			)
-			block.NewStore(constant.NewInt(types.I64, int64(len(rawStr))), length)
+			isHeap := block.NewGetElementPtr(
+				genType(e.Type()), str,
+				constant.NewInt(types.I32, 0),
+				constant.NewInt(types.I32, 2),
+			)
+			block.NewStore(constant.False, isHeap)
+			block.NewStore(constant.NewInt(types.I64, int64(len(rawStr)-1)), length)
 			block.NewStore(constant.NewGetElementPtr(
 				types.NewArray(uint64(len(rawStr)), types.I8),
 				strDef,
@@ -802,7 +821,15 @@ func genExpression(expr ast.Expression) value.Value {
 	panic(fmt.Sprintf("Expression node has invalid static type. %T", expr))
 }
 
-func createSlicePrint(elType ast.Type, llvmType types.Type) {
+func ensureSlicePrint(sliceType *ast.SliceType, llvmType types.Type) {
+	slicePrintFuncName := fmt.Sprintf("myc__slice_%s_print", getTypeName(sliceType.ElType))
+
+	for _, f := range module.Funcs {
+		if f.Name() == slicePrintFuncName {
+			return
+		}
+	}
+
 	openBracket := "[\x00"
 	openBracketDef := module.NewGlobalDef("", constant.NewCharArrayFromString(openBracket))
 	commaSpace := ", \x00"
@@ -812,7 +839,7 @@ func createSlicePrint(elType ast.Type, llvmType types.Type) {
 
 	param := ir.NewParam("", types.NewPointer(llvmType))
 	f := module.NewFunc(
-		fmt.Sprintf("myc__slice_%s_print", getTypeName(elType)),
+		slicePrintFuncName,
 		types.Void,
 		param,
 	)
@@ -833,7 +860,7 @@ func createSlicePrint(elType ast.Type, llvmType types.Type) {
 		constant.NewInt(types.I32, 0),
 		constant.NewInt(types.I32, 0),
 	)
-	loadedBuffer := b.NewLoad(types.NewPointer(genType(elType)), buffer)
+	loadedBuffer := b.NewLoad(types.NewPointer(genType(sliceType.ElType)), buffer)
 
 	b.NewCall(printfDeclaration, constant.NewGetElementPtr(
 		types.NewArray(uint64(len(openBracket)), types.I8),
@@ -849,12 +876,12 @@ func createSlicePrint(elType ast.Type, llvmType types.Type) {
 	b.NewCondBr(comparison, loopBlock, afterBlock)
 
 	idx = loopBlock.NewLoad(types.I64, idxVar)
-	valueAtIdx := loopBlock.NewGetElementPtr(genType(elType), loadedBuffer, idx)
-	if _, ok := genType(elType).(*types.StructType); ok {
-		loopBlock.NewCall(getPrintFuncForType(elType), valueAtIdx)
+	valueAtIdx := loopBlock.NewGetElementPtr(genType(sliceType.ElType), loadedBuffer, idx)
+	if _, ok := genType(sliceType.ElType).(*types.StructType); ok {
+		loopBlock.NewCall(getPrintFuncForType(sliceType.ElType), valueAtIdx)
 	} else {
-		loadedValue := loopBlock.NewLoad(genType(elType), valueAtIdx)
-		loopBlock.NewCall(getPrintFuncForType(elType), loadedValue)
+		loadedValue := loopBlock.NewLoad(genType(sliceType.ElType), valueAtIdx)
+		loopBlock.NewCall(getPrintFuncForType(sliceType.ElType), loadedValue)
 	}
 	loopBlock.NewCall(printfDeclaration, constant.NewGetElementPtr(
 		types.NewArray(uint64(len(commaSpace)), types.I8),
@@ -869,12 +896,12 @@ func createSlicePrint(elType ast.Type, llvmType types.Type) {
 	loopBlock.NewCondBr(comparisonAgain, nocommaPrintBlock, loopBlock)
 
 	idx = nocommaPrintBlock.NewLoad(types.I64, idxVar)
-	valueAtIdx = nocommaPrintBlock.NewGetElementPtr(genType(elType), loadedBuffer, idx)
-	if _, ok := genType(elType).(*types.StructType); ok {
-		nocommaPrintBlock.NewCall(getPrintFuncForType(elType), valueAtIdx)
+	valueAtIdx = nocommaPrintBlock.NewGetElementPtr(genType(sliceType.ElType), loadedBuffer, idx)
+	if _, ok := genType(sliceType.ElType).(*types.StructType); ok {
+		nocommaPrintBlock.NewCall(getPrintFuncForType(sliceType.ElType), valueAtIdx)
 	} else {
-		loadedValue := nocommaPrintBlock.NewLoad(genType(elType), valueAtIdx)
-		nocommaPrintBlock.NewCall(getPrintFuncForType(elType), loadedValue)
+		loadedValue := nocommaPrintBlock.NewLoad(genType(sliceType.ElType), valueAtIdx)
+		nocommaPrintBlock.NewCall(getPrintFuncForType(sliceType.ElType), loadedValue)
 	}
 	nocommaPrintBlock.NewBr(afterBlock)
 
@@ -885,6 +912,234 @@ func createSlicePrint(elType ast.Type, llvmType types.Type) {
 		constant.NewInt(types.I32, 0),
 	))
 	afterBlock.NewRet(nil)
+}
+
+func createStructPrint(structType *ast.StructType) {
+	selfParam := ir.NewParam("", types.NewPointer(genType(structType)))
+	structPrintFunction := module.NewFunc(fmt.Sprintf("myc__%s_print", getTypeName(structType)), types.Void, selfParam)
+	printBlock := structPrintFunction.NewBlock("")
+
+	initString := fmt.Sprintf("%s{\x00", getTypeName(structType))
+	initStringDef := module.NewGlobalDef("", constant.NewCharArrayFromString(initString))
+	printBlock.NewCall(printfDeclaration, constant.NewGetElementPtr(
+		types.NewArray(uint64(len(initString)), types.I8),
+		initStringDef,
+		constant.NewInt(types.I32, 0),
+		constant.NewInt(types.I32, 0),
+	))
+
+	colonSpace := ": \x00"
+	colonSpaceDef := module.NewGlobalDef("", constant.NewCharArrayFromString(colonSpace))
+
+	commaSpace := ", \x00"
+	commaSpaceDef := module.NewGlobalDef("", constant.NewCharArrayFromString(commaSpace))
+
+	for i, m := range structType.Members {
+		fieldString := fmt.Sprintf("%s\x00", m.Identifier.Lexeme)
+		fieldStringDef := module.NewGlobalDef("", constant.NewCharArrayFromString(fieldString))
+		printBlock.NewCall(printfDeclaration, constant.NewGetElementPtr(
+			types.NewArray(uint64(len(fieldString)), types.I8),
+			fieldStringDef,
+			constant.NewInt(types.I32, 0),
+			constant.NewInt(types.I32, 0),
+		))
+		printBlock.NewCall(printfDeclaration, constant.NewGetElementPtr(
+			types.NewArray(uint64(len(colonSpace)), types.I8),
+			colonSpaceDef,
+			constant.NewInt(types.I32, 0),
+			constant.NewInt(types.I32, 0),
+		))
+
+		member := printBlock.NewGetElementPtr(genType(structType), selfParam,
+			constant.NewInt(types.I32, 0),
+			constant.NewInt(types.I32, int64(i)),
+		)
+		loadedMember := printBlock.NewLoad(genType(m.Type), member)
+
+		if _, ok := loadedMember.Type().(*types.StructType); ok {
+			printBlock.NewCall(getPrintFuncForType(m.Type), loadedMember.Src)
+		} else {
+			printBlock.NewCall(getPrintFuncForType(m.Type), loadedMember)
+		}
+
+		if i != len(structType.Members)-1 {
+			printBlock.NewCall(printfDeclaration, constant.NewGetElementPtr(
+				types.NewArray(uint64(len(commaSpace)), types.I8),
+				commaSpaceDef,
+				constant.NewInt(types.I32, 0),
+				constant.NewInt(types.I32, 0),
+			))
+		}
+	}
+
+	closeString := "}\x00"
+	closeStringDef := module.NewGlobalDef("", constant.NewCharArrayFromString(closeString))
+	printBlock.NewCall(printfDeclaration, constant.NewGetElementPtr(
+		types.NewArray(uint64(len(closeString)), types.I8),
+		closeStringDef,
+		constant.NewInt(types.I32, 0),
+		constant.NewInt(types.I32, 0),
+	))
+
+	printBlock.NewRet(nil)
+}
+
+func createStructDrop(structType *ast.StructType) {
+	structDropFuncName := fmt.Sprintf("myc__%s_drop", getTypeName(structType))
+
+	selfParam := ir.NewParam("", types.NewPointer(genType(structType)))
+	structDrop := module.NewFunc(structDropFuncName, types.Void, selfParam)
+	structDropBlock := structDrop.NewBlock("")
+
+	for i, m := range structType.Members {
+		if !m.Type.IsCopyable() {
+			var memberDropFunc *ir.Func
+			memberDropFuncName := fmt.Sprintf("myc__%s_drop", getTypeName(m.Type))
+
+			for _, f := range module.Funcs {
+				if f.Name() == memberDropFuncName {
+					memberDropFunc = f
+				}
+			}
+
+			if memberDropFunc == nil {
+				panic("Internal error: could not find drop function for struct member.")
+			}
+
+			memberPtr := structDropBlock.NewGetElementPtr(
+				genType(structType),
+				selfParam,
+				constant.NewInt(types.I32, 0),
+				constant.NewInt(types.I32, int64(i)),
+			)
+
+			structDropBlock.NewCall(memberDropFunc, memberPtr)
+		}
+	}
+
+	structDropBlock.NewRet(nil)
+}
+
+func ensureSliceDrop(sliceType *ast.SliceType, llvmType types.Type) {
+	sliceDropExists := false
+	sliceDropFuncName := fmt.Sprintf("myc__slice_%s_drop", getTypeName(sliceType.ElType))
+
+	for _, f := range module.Funcs {
+		if f.Name() == sliceDropFuncName {
+			sliceDropExists = true
+		}
+	}
+
+	if sliceDropExists {
+		return
+	}
+
+	selfParam := ir.NewParam("", types.NewPointer(llvmType))
+	sliceDrop := module.NewFunc(sliceDropFuncName, types.Void, selfParam)
+	sliceDropBlock := sliceDrop.NewBlock("")
+
+	buffer := sliceDropBlock.NewGetElementPtr(
+		llvmType,
+		selfParam,
+		constant.NewInt(types.I32, 0),
+		constant.NewInt(types.I32, 0),
+	)
+
+	casted := sliceDropBlock.NewBitCast(sliceDropBlock.NewLoad(
+		types.NewPointer(genType(sliceType.ElType)), buffer,
+	), types.I8Ptr)
+	sliceDropBlock.NewCall(freeDeclaration, casted)
+
+	sliceDropBlock.NewStore(constant.NewNull(types.NewPointer(genType(sliceType.ElType))), buffer)
+
+	sliceDropBlock.NewRet(nil)
+}
+
+func ensureBoxOrPtrPrint(t ast.Type, llvmType types.Type) {
+	boxType, isBox := t.(*ast.BoxType)
+	ptrType, isPtr := t.(*ast.PointerType)
+
+	var elType types.Type
+
+	printFuncName := ""
+	if isBox {
+		printFuncName = fmt.Sprintf("myc__box_%s_print", getTypeName(boxType.ElType))
+		elType = genType(boxType.ElType)
+	} else if isPtr {
+		printFuncName = fmt.Sprintf("myc__ptr_%s_print", getTypeName(ptrType.ElType))
+		elType = genType(ptrType.ElType)
+	} else {
+		panic("Internal error: can only call `ensureBoxOrPtrPrint` with box or ptr types.")
+	}
+
+	for _, f := range module.Funcs {
+		if f.Name() == printFuncName {
+			return
+		}
+	}
+
+	selfParam := ir.NewParam("", types.NewPointer(elType))
+	boxPrint := module.NewFunc(printFuncName, types.Void, selfParam)
+	boxPrintBlock := boxPrint.NewBlock("")
+	ptrFmtDef := module.NewGlobalDef("", constant.NewCharArrayFromString("%p\x00"))
+	boxPrintBlock.NewCall(printfDeclaration, constant.NewGetElementPtr(
+		types.NewArray(3, types.I8),
+		ptrFmtDef,
+		constant.NewInt(types.I32, 0),
+		constant.NewInt(types.I32, 0),
+	), selfParam)
+	boxPrintBlock.NewRet(nil)
+}
+
+func ensureBoxDrop(boxType *ast.BoxType, llvmType types.Type) {
+	boxDropFuncName := fmt.Sprintf("myc__box_%s_drop", getTypeName(boxType.ElType))
+
+	for _, f := range module.Funcs {
+		if f.Name() == boxDropFuncName {
+			return
+		}
+	}
+
+	selfParam := ir.NewParam("", types.NewPointer(llvmType))
+	boxDrop := module.NewFunc(boxDropFuncName, types.Void, selfParam)
+	boxDropBlock := boxDrop.NewBlock("")
+	casted := boxDropBlock.NewBitCast(boxDropBlock.NewLoad(llvmType, selfParam), types.I8Ptr)
+	boxDropBlock.NewCall(freeDeclaration, casted)
+	boxDropBlock.NewStore(constant.NewNull(llvmType.(*types.PointerType)), selfParam)
+	boxDropBlock.NewRet(nil)
+}
+
+func createPrimitiveDrops() {
+	// `str` is the only primitive that needs a `drop`
+	selfParam := ir.NewParam("", types.NewPointer(genType(&ast.Primitive{Name: "str"})))
+	strDrop := module.NewFunc("myc__str_drop", types.Void, selfParam)
+
+	checkHeapBlock := strDrop.NewBlock("")
+	strDropBlock := strDrop.NewBlock("")
+	endBlock := strDrop.NewBlock("")
+
+	isHeapPtr := checkHeapBlock.NewGetElementPtr(
+		genType(&ast.Primitive{Name: "str"}),
+		selfParam,
+		constant.NewInt(types.I32, 0),
+		constant.NewInt(types.I32, 2),
+	)
+	isHeap := checkHeapBlock.NewLoad(types.I1, isHeapPtr)
+	check := checkHeapBlock.NewICmp(enum.IPredEQ, isHeap, constant.True)
+	checkHeapBlock.NewCondBr(check, strDropBlock, endBlock)
+
+	buffer := strDropBlock.NewGetElementPtr(
+		genType(&ast.Primitive{Name: "str"}),
+		selfParam,
+		constant.NewInt(types.I32, 0),
+		constant.NewInt(types.I32, 0),
+	)
+
+	strDropBlock.NewCall(freeDeclaration, strDropBlock.NewLoad(types.I8Ptr, buffer))
+	strDropBlock.NewStore(constant.NewNull(types.I8Ptr), buffer)
+	strDropBlock.NewBr(endBlock)
+
+	endBlock.NewRet(nil)
 }
 
 func createPrimitivePrintFunctions() {
@@ -995,6 +1250,7 @@ func Gen(statements []ast.Statement) string {
 	printfDeclaration.Sig.Variadic = true
 
 	mallocDeclaration = module.NewFunc("malloc", types.I8Ptr, ir.NewParam("", types.I64))
+	freeDeclaration = module.NewFunc("free", types.Void, ir.NewParam("", types.I8Ptr))
 	memcpyDeclaration = module.NewFunc(
 		"llvm.memcpy.p0i8.p0i8.i64",
 		types.Void,
@@ -1004,6 +1260,7 @@ func Gen(statements []ast.Statement) string {
 		ir.NewParam("isvolatile", types.I1),
 	)
 
+	createPrimitiveDrops()
 	createPrimitivePrintFunctions()
 
 	panicMessageParam := ir.NewParam("message", types.I8Ptr)
@@ -1013,15 +1270,8 @@ func Gen(statements []ast.Statement) string {
 	panicBlock.NewCall(exitDeclaration, constant.NewInt(types.I32, 1))
 	panicBlock.NewRet(nil)
 
-	cmain := module.NewFunc("main", types.I32)
-	block = cmain.NewBlock("main_block")
-
 	for _, statement := range statements {
 		genStatement(statement)
-	}
-
-	if block.Term == nil {
-		block.NewRet(constant.NewInt(types.I32, 0))
 	}
 
 	return module.String()

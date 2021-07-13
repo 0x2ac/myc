@@ -123,6 +123,17 @@ func isAssignable(e ast.Expression, t ast.Type, options ...bool) error {
 func Analyze(statements []ast.Statement) {
 	for _, statement := range statements {
 		analyzeStatement(statement)
+
+		if f, ok := statement.(*ast.FunctionDeclaration); ok {
+			if f.Identifier.Lexeme == "main" {
+				// Special checking for top-level main function
+				if f.ReturnType != nil {
+					analysisError(f.Identifier, "Top level main function must not return anything.")
+				} else if len(f.Parameters) != 0 {
+					analysisError(f.Identifier, "Top level main function cannot take any parameters.")
+				}
+			}
+		}
 	}
 }
 
