@@ -25,47 +25,52 @@ type Pos struct {
 	Column int
 }
 
-func (p *Pos) SourceContext() string {
+func (t *Token) SourceContext() string {
 	source = strings.ReplaceAll(source, "\r\n", "\n")
 	sourceLines := strings.Split(source, "\n")
 	numLines := len(sourceLines)
 
 	var highlightChar byte = '^'
-	offsetHighlight := make([]byte, p.Column)
+	offsetHighlight := make([]byte, t.Pos.Column)
 
-	for i := 0; i < p.Column; i++ {
-		offsetHighlight[i] = ' '
+	for i := 0; i < t.Pos.Column; i++ {
+		if sourceLines[t.Pos.Line-1][i] == '\t' {
+			offsetHighlight[i] = '\t'
+		} else {
+			offsetHighlight[i] = ' '
+		}
 	}
 
-	offsetHighlight[p.Column-1] = highlightChar
+	offsetHighlight[t.Pos.Column-1] = highlightChar
 
-	if p.Line == 1 {
+	if t.Pos.Line == 1 {
 		return fmt.Sprintf(`
-1 | %s
-    %s`,
-			sourceLines[p.Line-1],
+%4d | %s
+     | %s`,
+			1,
+			sourceLines[t.Pos.Line-1],
 			string(offsetHighlight),
 		)
-	} else if p.Line == numLines-1 {
+	} else if t.Pos.Line == numLines-1 {
 		return fmt.Sprintf(`
-%d | %s
-%d | %s
-     %s`,
-			p.Line-1, sourceLines[p.Line-2],
-			p.Line, sourceLines[p.Line-1],
+%4d | %s
+%4d | %s
+     | %s`,
+			t.Pos.Line-1, sourceLines[t.Pos.Line-2],
+			t.Pos.Line, sourceLines[t.Pos.Line-1],
 			string(offsetHighlight),
 		)
 
 	} else {
 		return fmt.Sprintf(`
-%d | %s
-%d | %s
-     %s
-%d | %s`,
-			p.Line-1, sourceLines[p.Line-2],
-			p.Line, sourceLines[p.Line-1],
+%4d | %s
+%4d | %s
+     | %s
+%4d | %s`,
+			t.Pos.Line-1, sourceLines[t.Pos.Line-2],
+			t.Pos.Line, sourceLines[t.Pos.Line-1],
 			string(offsetHighlight),
-			p.Line+1, sourceLines[p.Line],
+			t.Pos.Line+1, sourceLines[t.Pos.Line],
 		)
 	}
 }

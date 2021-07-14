@@ -12,7 +12,7 @@ import (
 func analysisError(token lexer.Token, message string) {
 	log.Fatalf(
 		"%s\nanalysis-error: %d:%d: %s",
-		token.Pos.SourceContext(),
+		token.SourceContext(),
 		token.Pos.Line, token.Pos.Column, message,
 	)
 }
@@ -447,12 +447,11 @@ func analyzeExpression(expr ast.Expression) {
 			analyzeExpression(initializer)
 			if elType == nil {
 				elType = initializer.Type()
-			} else if !elType.Equals(initializer.Type()) {
-				analysisError(e.LeftBracketToken, fmt.Sprintf(
-					"Mixing types within slice literal. Expected elements of type: '%s', got '%s' instead.",
-					elType.String(),
-					initializer.Type().String(),
-				))
+			}
+
+			err := isAssignable(initializer, elType)
+			if err != nil {
+				analysisError(e.LeftBracketToken, "Mixing types within slice literal. "+err.Error())
 			}
 		}
 
@@ -692,7 +691,7 @@ func analyzeStatement(statement ast.Statement) {
 		s := statement.(*ast.PrintStatement)
 
 		if isTopLevel {
-			analysisError(s.PrintToken, "While statement cannot be top level.")
+			analysisError(s.PrintToken, "Print statement cannot be top level.")
 		}
 
 		for _, expr := range s.Expressions {
