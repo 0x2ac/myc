@@ -1044,15 +1044,39 @@ func ensureSliceDrop(sliceType *ast.SliceType, llvmType types.Type) {
 		constant.NewInt(types.I32, 0),
 		constant.NewInt(types.I32, 0),
 	)
+	lenPtr := sliceDropBlock.NewGetElementPtr(
+		llvmType,
+		selfParam,
+		constant.NewInt(types.I32, 0),
+		constant.NewInt(types.I32, 1),
+	)
+	loadedBuffer := sliceDropBlock.NewLoad(types.NewPointer(genType(sliceType.ElType)), buffer)
+	length := sliceDropBlock.NewLoad(types.I64, lenPtr)
 
-	casted := sliceDropBlock.NewBitCast(sliceDropBlock.NewLoad(
+	loopBlock := sliceDrop.NewBlock("")
+	afterBlock := sliceDrop.NewBlock("")
+
+	idxVar := sliceDropBlock.NewAlloca(types.I64)
+	sliceDropBlock.NewStore(constant.NewInt(types.I64, 0), idxVar)
+	sliceDropBlock.NewBr(loopBlock)
+
+	loopBlock.NewCall(getDropFunc(sliceType.ElType), loopBlock.NewGetElementPtr(
+		genType(sliceType.ElType),
+		loadedBuffer,
+		loopBlock.NewLoad(types.I64, idxVar),
+	))
+
+	loopBlock.NewStore(loopBlock.NewAdd(loopBlock.NewLoad(types.I64, idxVar), constant.NewInt(types.I64, 1)), idxVar)
+	idxLessThanLen := loopBlock.NewICmp(enum.IPredULT, loopBlock.NewLoad(types.I64, idxVar), length)
+	loopBlock.NewCondBr(idxLessThanLen, loopBlock, afterBlock)
+
+	casted := afterBlock.NewBitCast(afterBlock.NewLoad(
 		types.NewPointer(genType(sliceType.ElType)), buffer,
 	), types.I8Ptr)
-	sliceDropBlock.NewCall(freeDeclaration, casted)
 
-	sliceDropBlock.NewStore(constant.NewNull(types.NewPointer(genType(sliceType.ElType))), buffer)
-
-	sliceDropBlock.NewRet(nil)
+	afterBlock.NewCall(freeDeclaration, casted)
+	afterBlock.NewStore(constant.NewNull(types.NewPointer(genType(sliceType.ElType))), buffer)
+	afterBlock.NewRet(nil)
 }
 
 func ensureBoxOrPtrPrint(t ast.Type, llvmType types.Type) {
