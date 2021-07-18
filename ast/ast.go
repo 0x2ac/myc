@@ -365,6 +365,22 @@ type IndexExpression struct {
 	Typ              Type
 }
 
+type AsExpression struct {
+	Expression Expression
+	TargetType Type
+
+	AsToken lexer.Token
+	Typ     Type
+}
+
+type IsExpression struct {
+	Expression   Expression
+	ComparedType Type
+
+	IsToken lexer.Token
+	Typ     Type
+}
+
 type CompositeLiteral struct {
 	Typ                 Type
 	NamedInitializers   *[]NamedInitializer
@@ -412,6 +428,8 @@ func (*VariableExpression) isExpression() {}
 func (*CallExpression) isExpression()     {}
 func (*GetExpression) isExpression()      {}
 func (*IndexExpression) isExpression()    {}
+func (*AsExpression) isExpression()       {}
+func (*IsExpression) isExpression()       {}
 func (*CompositeLiteral) isExpression()   {}
 func (*SliceLiteral) isExpression()       {}
 func (*ReferenceOf) isExpression()        {}
@@ -464,6 +482,22 @@ func (i *IndexExpression) Type() Type {
 
 func (i *IndexExpression) ErrorToken() lexer.Token {
 	return i.LeftBracketToken
+}
+
+func (a *AsExpression) Type() Type {
+	return a.Typ
+}
+
+func (a *AsExpression) ErrorToken() lexer.Token {
+	return a.AsToken
+}
+
+func (i *IsExpression) Type() Type {
+	return i.Typ
+}
+
+func (i *IsExpression) ErrorToken() lexer.Token {
+	return i.IsToken
 }
 
 func (c *CompositeLiteral) Type() Type {

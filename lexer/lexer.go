@@ -18,6 +18,8 @@ var Keywords = [...]string{
 	"if",
 	"else",
 	"while",
+	"as",
+	"is",
 }
 
 type Pos struct {
@@ -95,6 +97,8 @@ const (
 	IF
 	ELSE
 	WHILE
+	AS
+	IS
 	keyword_end
 
 	LEFT_PAREN

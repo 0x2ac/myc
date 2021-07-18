@@ -490,6 +490,8 @@ func parsePrimary(expectingBlock bool) ast.Expression {
 	for peek(0).Type == lexer.LEFT_PAREN ||
 		peek(0).Type == lexer.LEFT_BRACKET ||
 		peek(0).Type == lexer.DOT ||
+		peek(0).Type == lexer.AS ||
+		peek(0).Type == lexer.IS ||
 		peek(0).Type == lexer.CARET {
 
 		if peek(0).Type == lexer.LEFT_PAREN {
@@ -545,6 +547,26 @@ func parsePrimary(expectingBlock bool) ast.Expression {
 			expr = &ast.Dereference{
 				Expression: expr,
 				CaretToken: peek(-1),
+			}
+		}
+
+		if peek(0).Type == lexer.AS {
+			asToken := peek(0)
+			current++
+			expr = &ast.AsExpression{
+				Expression: expr,
+				TargetType: parseType(),
+				AsToken:    asToken,
+			}
+		}
+
+		if peek(0).Type == lexer.IS {
+			isToken := peek(0)
+			current++
+			expr = &ast.IsExpression{
+				Expression:   expr,
+				ComparedType: parseType(),
+				IsToken:      isToken,
 			}
 		}
 	}

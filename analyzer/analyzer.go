@@ -131,20 +131,10 @@ func isAssignable(valueType ast.Type, targetType ast.Type, valueIsLvalue bool, o
 				))
 			}
 		} else if valueIsSumType && !targetIsSumType {
-			// The reverse situation of the previous one
-			tInOptions := false
-			for _, o := range valueSumT.Options {
-				if o.Equals(targetType) && !tInOptions {
-					tInOptions = true
-				}
-			}
-
-			if !tInOptions {
-				return errors.New(fmt.Sprintf(
-					"Expression of sum type: '%s' cannot be used for target of type: '%s'",
-					valueType.String(), targetType.String(),
-				))
-			}
+			return errors.New(fmt.Sprintf(
+				"Cannot implicitly cast sum-type: '%s' to its option: '%s'.\n  help: cast it explicitly using `as`.",
+				valueSumT.String(), targetType.String(),
+			))
 		} else if valueIsSumType && targetIsSumType {
 			// The target's sum type must be a supertype of the value's
 			// i.e. all of the values options must available in the target as well
@@ -431,6 +421,54 @@ func analyzeExpression(expr ast.Expression) {
 		}
 
 		e.Typ = st.ElType
+	case *ast.AsExpression:
+		e := expr.(*ast.AsExpression)
+
+		analyzeExpression(e.Expression)
+		if sumType, ok := e.Expression.Type().(*ast.SumType); !ok {
+			analysisError(e.AsToken, "Can only type cast sum-type expressions.")
+		} else {
+			foundOption := false
+			for _, o := range sumType.Options {
+				if o.Equals(e.TargetType) {
+					foundOption = true
+					break
+				}
+			}
+
+			if !foundOption {
+				analysisError(e.AsToken, fmt.Sprintf(
+					"Cannot cast expression of sum-type: '%s' to type: '%s'.",
+					sumType.String(), e.TargetType.String(),
+				))
+			}
+		}
+
+		e.Typ = e.TargetType
+	case *ast.IsExpression:
+		e := expr.(*ast.IsExpression)
+
+		analyzeExpression(e.Expression)
+		if sumType, ok := e.Expression.Type().(*ast.SumType); !ok {
+			analysisError(e.IsToken, "Can only type check sum-type expressions.")
+		} else {
+			foundOption := false
+			for _, o := range sumType.Options {
+				if o.Equals(e.ComparedType) {
+					foundOption = true
+					break
+				}
+			}
+
+			if !foundOption {
+				analysisError(e.IsToken, fmt.Sprintf(
+					"Unnecessary type-check, sum-type: '%s' can never be type: '%s'.",
+					sumType.String(), e.ComparedType.String(),
+				))
+			}
+		}
+
+		e.Typ = &ast.Primitive{Name: "bool"}
 	case *ast.CompositeLiteral:
 		e := expr.(*ast.CompositeLiteral)
 		r := e.Typ.(*ast.StructType)
@@ -691,7 +729,7 @@ func analyzeStatement(statement ast.Statement) {
 			err := isAssignable(s.Value.Type(), s.Type, isLvalue(s.Value))
 
 			if err != nil {
-				analysisError(s.Identifier, "Initial expression has different type than provided one. "+err.Error())
+				analysisError(s.Identifier, "Initial expression is not valid for provided type. "+err.Error())
 			}
 		}
 		// We do nothing in the final case:
