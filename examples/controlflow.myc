@@ -1,15 +1,17 @@
-var n1 = 4
-var n2 = 2
+fun main() {
+    var n1 = 4
+    var n2 = 2
 
-if n1 < 20 && n2 < 20 {
-    print n1, n2
-} else if n1 < 20 {
-    print n1
-} else {
-    print n2
-}
+    if n1 < 20 && n2 < 20 {
+        print n1, n2
+    } else if n1 < 20 {
+        print n1
+    } else {
+        print n2
+    }
 
-while n1 > 0 {
-    print n1
-    n1 = n1 - 1
+    while n1 > 0 {
+        print n1
+        n1 = n1 - 1
+    }
 }

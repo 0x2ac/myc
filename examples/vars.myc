@@ -1,6 +1,8 @@
-var a = 45
-{
+fun main() {
+    var a = 45
     var b = 32
-    print a, b
+    
+    print a
+    print b
     print a + b
 }

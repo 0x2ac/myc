@@ -9,22 +9,6 @@ struct Line {
     end   Point
 }
 
-var p1 = Point{1, 4}
-var p2 = Point{x: 3, y: 4}
-var p3 = Point{
-    x: 56,
-    y: 78,
-}
-
-print p1
-print p2.x + p3.y
-print p2.y + p3.x
-
-var l = Line{
-    begin: p2,
-    end:   p3,
-}
-
 fun xsum(l Line) int {
     return l.begin.x + l.end.x
 }
@@ -33,6 +17,25 @@ fun ysum(l Line) int {
     return l.begin.y + l.end.y
 }
 
-print l
-print xsum(l)
-print ysum(l)
+fun main() {
+    var p1 = Point{1, 4}
+    var p2 = Point{x: 3, y: 4}
+    var p3 = Point{
+        x: 56,
+        y: 78,
+    }
+
+    print p1
+    print p2.x + p3.y
+    print p2.y + p3.x
+
+    var l = Line{
+        begin: p2,
+        end:   p3,
+    }
+
+
+    print l
+    print xsum(l)
+    print ysum(l)
+}
