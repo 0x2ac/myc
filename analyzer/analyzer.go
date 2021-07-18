@@ -136,23 +136,12 @@ func isAssignable(valueType ast.Type, targetType ast.Type, valueIsLvalue bool, o
 				valueSumT.String(), targetType.String(),
 			))
 		} else if valueIsSumType && targetIsSumType {
-			// The target's sum type must be a supertype of the value's
-			// i.e. all of the values options must available in the target as well
-			for _, valueOption := range valueSumT.Options {
-				foundValueOptionInTarget := false
-				for _, targetOption := range targetSumT.Options {
-					if targetOption.Equals(valueOption) {
-						foundValueOptionInTarget = true
-						break
-					}
-				}
-				if !foundValueOptionInTarget {
-					return errors.New(fmt.Sprintf(
-						"Incorrect sum type: target of type: '%s' is missing option: '%s' of value with type: '%s'.",
-						targetType.String(), valueOption.String(), valueType.String(),
-					))
-				}
-			}
+			// Code to check for this case can be found in git history.
+			// Making it an error for now to make implementation simpler.
+			return errors.New(fmt.Sprintf(
+				"Cannot assign sum-type: '%s' to sum-type: '%s'.",
+				valueSumT.String(), targetSumT.String(),
+			))
 		} else {
 			return errors.New(fmt.Sprintf(
 				"Cannot assign value of type: '%s' to type: '%s'.",
