@@ -9,13 +9,17 @@ import (
 func main() {
 	code := `
 struct Container {
-	value ~int
+	value int
+}
+
+fun makeContainer() Container {
+	var s int|str = 24
+	return Container{value: s}
 }
 
 fun main() {
-	var c1 = Container{value: 56}
-	var c2 = Container{value: 34}
-	var cs = [c1, c2]
+	var c = makeContainer()
+	print c
 }
 `
 	tokens := lexer.Lex(code)

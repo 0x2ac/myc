@@ -39,12 +39,17 @@ type SliceType struct {
 	ElType Type
 }
 
+type SumType struct {
+	Options []Type
+}
+
 func (*Primitive) isType()    {}
 func (*FunctionType) isType() {}
 func (*StructType) isType()   {}
 func (*PointerType) isType()  {}
 func (*BoxType) isType()      {}
 func (*SliceType) isType()    {}
+func (*SumType) isType()      {}
 
 func (p *Primitive) Equals(t Type) bool {
 	if primType, ok := t.(*Primitive); ok {
@@ -153,7 +158,7 @@ func (p *PointerType) Equals(t Type) bool {
 }
 
 func (p *PointerType) String() string {
-	return fmt.Sprintf("*%s", p.ElType.String())
+	return fmt.Sprintf("*(%s)", p.ElType.String())
 }
 
 func (p *PointerType) IsCopyable() bool {
@@ -189,6 +194,39 @@ func (s *SliceType) String() string {
 }
 
 func (s *SliceType) IsCopyable() bool {
+	return false
+}
+
+func (s *SumType) Equals(t Type) bool {
+	if sumType, ok := t.(*SumType); ok {
+		if len(sumType.Options) != len(s.Options) {
+			return false
+		}
+
+		for i, t := range sumType.Options {
+			if !t.Equals(s.Options[i]) {
+				return false
+			}
+		}
+
+		return true
+	}
+
+	return false
+}
+
+func (s *SumType) String() string {
+	result := ""
+	for i, t := range s.Options {
+		result += t.String()
+		if i != len(s.Options)-1 {
+			result += "|"
+		}
+	}
+	return result
+}
+
+func (s *SumType) IsCopyable() bool {
 	return false
 }
 

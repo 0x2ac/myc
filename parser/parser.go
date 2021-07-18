@@ -558,47 +558,103 @@ func parsePrimary(expectingBlock bool) ast.Expression {
 }
 
 func parseType() ast.Type {
+	var typ ast.Type
+
 	if peek(0).Type == lexer.IDENTIFIER {
 		current++
 
 		if isIdentifierPrimitive(peek(-1)) {
-			return &ast.Primitive{
+			typ = &ast.Primitive{
 				Name: peek(-1).Lexeme,
 			}
 		} else {
-			return &ast.StructType{
+			typ = &ast.StructType{
 				Name: peek(-1).Lexeme,
 				// Members are resolved in analysis
 			}
 		}
 	} else if peek(0).Type == lexer.STAR {
 		current++
-		return &ast.PointerType{
+		typ = &ast.PointerType{
 			ElType: parseType(),
 		}
 	} else if peek(0).Type == lexer.TILDE {
 		current++
-		return &ast.BoxType{
+		typ = &ast.BoxType{
 			ElType: parseType(),
 		}
 	} else if peek(0).Type == lexer.LEFT_BRACKET {
 		current++
-		typ := parseType()
+		elType := parseType()
 		expect(lexer.RIGHT_BRACKET, "Expect closing bracket in slice type.")
-		return &ast.SliceType{
-			ElType: typ,
+		typ = &ast.SliceType{
+			ElType: elType,
+		}
+	} else if peek(0).Type == lexer.LEFT_PAREN {
+		// Type grouping: useful to show precedence when creating sum types.
+		current++
+		typ = parseType()
+		expect(lexer.RIGHT_PAREN, "Unclosed type grouping.")
+	}
+
+	for peek(0).Type == lexer.OR {
+		current++
+		if sumType, ok := typ.(*ast.SumType); ok {
+			sumType.Options = append(sumType.Options, parseType())
+		} else {
+			sumType := ast.SumType{Options: []ast.Type{typ}}
+			sumType.Options = append(sumType.Options, parseType())
+			typ = &sumType
 		}
 	}
 
-	parseError(
-		peek(0),
-		fmt.Sprintf(
-			"Expected type, found token: '%s' instead.",
-			peek(0).Lexeme,
-		),
-	)
+	// Flatten any sum-types
+	if s, ok := typ.(*ast.SumType); ok {
+		flattenSumType(s)
+	}
 
-	panic("")
+	if typ == nil {
+		parseError(
+			peek(0),
+			fmt.Sprintf(
+				"Expected type, found token: '%s' instead.",
+				peek(0).Lexeme,
+			),
+		)
+	}
+
+	return typ
+}
+
+func flattenSumType(s *ast.SumType) {
+	var newOptions []ast.Type
+
+	for _, o := range s.Options {
+		if nested, ok := o.(*ast.SumType); ok {
+			flattenSumType(nested)
+			newOptions = append(newOptions, nested.Options...)
+		} else {
+			if typeSliceContains(newOptions, o) {
+				parseError(peek(0), fmt.Sprintf(
+					"Found duplicate type: '%s' in sum type.", o.String(),
+				))
+			}
+
+			newOptions = append(newOptions, o)
+		}
+	}
+
+	s.Options = newOptions
+}
+
+func typeSliceContains(s []ast.Type, o ast.Type) bool {
+	for _, option := range s {
+		if option.Equals(o) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func Parse(inputTokens []lexer.Token) []ast.Statement {

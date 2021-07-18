@@ -62,51 +62,121 @@ func (s *SymbolTable) shadow(name string, typ ast.Type) {
 var namespace = NewSymbolTable()
 var typespace = NewSymbolTable()
 
+func isLvalue(e ast.Expression) bool {
+	if _, ok := e.(*ast.VariableExpression); ok {
+		return true
+	} else if _, ok := e.(*ast.GetExpression); ok {
+		return true
+	}
+
+	return false
+}
+
 // Returns whether an expression (e) is assignable to a variable of given type (t).
-// Will print an error at the provided error token and exit in case of a mismatch.
-func isAssignable(e ast.Expression, t ast.Type, options ...bool) error {
-	allowLvalueAssignmentToBox := false
+// Will return an error in case of a mismatch.
+func isAssignable(valueType ast.Type, targetType ast.Type, valueIsLvalue bool, options ...bool) error {
+	allowLvalueAssignmentToNoCopyTypes := false
 
 	if len(options) == 0 {
 	} else if len(options) == 1 {
-		allowLvalueAssignmentToBox = options[0]
+		allowLvalueAssignmentToNoCopyTypes = options[0]
 	} else {
 		panic("Invalid call to `isAssignable`")
 	}
 
-	if !e.Type().Equals(t) {
-		// Boxes can have unboxed variables assigned to them:
-		if b, ok := t.(*ast.BoxType); ok {
-			if !b.ElType.Equals(e.Type()) {
+	if !valueType.Equals(targetType) {
+		if p, ok := targetType.(*ast.PointerType); ok {
+			if _, ok := valueType.(*ast.PointerType); !ok {
 				return errors.New(fmt.Sprintf(
-					"Mismatched box types. Cannot assign value of type: '%s' to type: '%s'.",
-					e.Type().String(), t.String(),
+					"Value of type: '%s' cannot be used for type: '%s'.",
+					valueType.String(), targetType.String(),
 				))
 			}
 
-			return nil
+			err := isAssignable(valueType.(*ast.PointerType).ElType, p.ElType, valueIsLvalue, options...)
+			if err != nil {
+				return errors.New(fmt.Sprintf(
+					"Mismatched pointer types: cannot assign value of type: '%s' to type: '%s'.",
+					valueType.String(), targetType.String(),
+				))
+			}
 		}
 
-		return errors.New(fmt.Sprintf(
-			"Cannot assign value of type: '%s' to type: '%s'.",
-			e.Type().String(), t.String(),
-		))
+		if b, ok := targetType.(*ast.BoxType); ok {
+			// Boxes can have unboxed variables assigned to them:
+			if !b.ElType.Equals(valueType) {
+				return errors.New(fmt.Sprintf(
+					"Mismatched box types. Cannot assign value of type: '%s' to type: '%s'.",
+					valueType.String(), targetType.String(),
+				))
+			}
+		}
+
+		targetSumT, targetIsSumType := targetType.(*ast.SumType)
+		valueSumT, valueIsSumType := valueType.(*ast.SumType)
+
+		if targetIsSumType && !valueIsSumType {
+			// Sum types can have any of their options assigned to them
+			eTypeInOptions := false
+			for _, o := range targetSumT.Options {
+				if o.Equals(valueType) && !eTypeInOptions {
+					eTypeInOptions = true
+				}
+			}
+
+			if !eTypeInOptions {
+				return errors.New(fmt.Sprintf(
+					"Expression of type: '%s' is not an option for sum type: '%s'",
+					valueType.String(), targetSumT.String(),
+				))
+			}
+		} else if valueIsSumType && !targetIsSumType {
+			// The reverse situation of the previous one
+			tInOptions := false
+			for _, o := range valueSumT.Options {
+				if o.Equals(targetType) && !tInOptions {
+					tInOptions = true
+				}
+			}
+
+			if !tInOptions {
+				return errors.New(fmt.Sprintf(
+					"Expression of sum type: '%s' cannot be used for target of type: '%s'",
+					valueType.String(), targetType.String(),
+				))
+			}
+		} else if valueIsSumType && targetIsSumType {
+			// The target's sum type must be a supertype of the value's
+			// i.e. all of the values options must available in the target as well
+			for _, valueOption := range valueSumT.Options {
+				foundValueOptionInTarget := false
+				for _, targetOption := range targetSumT.Options {
+					if targetOption.Equals(valueOption) {
+						foundValueOptionInTarget = true
+						break
+					}
+				}
+				if !foundValueOptionInTarget {
+					return errors.New(fmt.Sprintf(
+						"Incorrect sum type: target of type: '%s' is missing option: '%s' of value with type: '%s'.",
+						targetType.String(), valueOption.String(), valueType.String(),
+					))
+				}
+			}
+		} else {
+			return errors.New(fmt.Sprintf(
+				"Cannot assign value of type: '%s' to type: '%s'.",
+				valueType.String(), targetType.String(),
+			))
+		}
 	}
 
-	if !t.IsCopyable() && !allowLvalueAssignmentToBox {
+	if !targetType.IsCopyable() && !allowLvalueAssignmentToNoCopyTypes {
 		// If `t` is not copyable it can only be assigned rvalues
-		isLvalue := false
-
-		if _, ok := e.(*ast.VariableExpression); ok {
-			isLvalue = true
-		} else if _, ok := e.(*ast.GetExpression); ok {
-			isLvalue = true
-		}
-
-		if isLvalue {
+		if valueIsLvalue {
 			return errors.New(fmt.Sprintf(
 				"Cannot assign lvalue to type: '%s'.",
-				t.String(),
+				targetType.String(),
 			))
 		}
 	}
@@ -185,7 +255,7 @@ func analyzeExpression(expr ast.Expression) {
 				analysisError(e.Operator, "Target for assignment is not lvalue.")
 			}
 
-			err := isAssignable(e.Right, e.Left.Type())
+			err := isAssignable(e.Right.Type(), e.Left.Type(), isLvalue(e.Right))
 			if err != nil {
 				analysisError(e.Operator, err.Error())
 			}
@@ -282,9 +352,9 @@ func analyzeExpression(expr ast.Expression) {
 		for i, param := range signature.Parameters {
 			analyzeExpression(e.Arguments[i])
 
-			allowLvalueAssignmentToBox := true
+			allowLvalueAssignment := true
 
-			err := isAssignable(e.Arguments[i], param, allowLvalueAssignmentToBox)
+			err := isAssignable(e.Arguments[i].Type(), param, isLvalue(e.Arguments[i]), allowLvalueAssignment)
 
 			if err != nil {
 				analysisError(
@@ -402,7 +472,7 @@ func analyzeExpression(expr ast.Expression) {
 				}
 
 				// Check if the expression has the appropriate type for the member
-				err := isAssignable(initializer.Value, resolvedMember.Type)
+				err := isAssignable(initializer.Value.Type(), resolvedMember.Type, isLvalue(initializer.Value))
 
 				if err != nil {
 					analysisError(
@@ -427,7 +497,7 @@ func analyzeExpression(expr ast.Expression) {
 			for i, initializer := range *e.UnnamedInitializers {
 				analyzeExpression(initializer)
 
-				err := isAssignable(initializer, r.Members[i].Type)
+				err := isAssignable(initializer.Type(), r.Members[i].Type, isLvalue(initializer))
 
 				if err != nil {
 					analysisError(
@@ -449,7 +519,7 @@ func analyzeExpression(expr ast.Expression) {
 				elType = initializer.Type()
 			}
 
-			err := isAssignable(initializer, elType)
+			err := isAssignable(initializer.Type(), elType, isLvalue(initializer))
 			if err != nil {
 				analysisError(e.LeftBracketToken, "Mixing types within slice literal. "+err.Error())
 			}
@@ -618,10 +688,10 @@ func analyzeStatement(statement ast.Statement) {
 			s.Type = s.Value.Type()
 		} else if s.Type != nil && s.Value != nil {
 			// e.g. var foo string = 42
-			err := isAssignable(s.Value, s.Type)
+			err := isAssignable(s.Value.Type(), s.Type, isLvalue(s.Value))
 
 			if err != nil {
-				analysisError(s.Identifier, "Initial expression has different type than provided one."+err.Error())
+				analysisError(s.Identifier, "Initial expression has different type than provided one. "+err.Error())
 			}
 		}
 		// We do nothing in the final case:
@@ -721,7 +791,7 @@ func analyzeStatement(statement ast.Statement) {
 		} else if s.Expression != nil && functionScope.ReturnType == nil {
 			analysisError(s.ReturnToken, "Returning value in void function.")
 		} else if s.Expression != nil {
-			err := isAssignable(s.Expression, functionScope.ReturnType)
+			err := isAssignable(s.Expression.Type(), functionScope.ReturnType, isLvalue(s.Expression))
 
 			if err != nil {
 				analysisError(

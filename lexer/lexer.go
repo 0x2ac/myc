@@ -108,6 +108,7 @@ const (
 	COLON
 	CARET
 	AND
+	OR
 	BANG
 	TILDE
 	INTERP_BEGIN
@@ -305,7 +306,7 @@ func ScanToken() {
 		if match('|') {
 			addToken(OR_OR, "")
 		} else {
-			lexError(line, "Expected token: `|` after `|`.")
+			addToken(OR, "")
 		}
 	case '!':
 		if match('=') {

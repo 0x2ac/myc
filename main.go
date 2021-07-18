@@ -81,8 +81,6 @@ func run(filename string) {
 		"-o",
 		executableFile.Name(),
 	)
-	compileCommand.Stdout = os.Stdout
-	compileCommand.Stderr = os.Stderr
 	err = compileCommand.Run()
 	if err != nil {
 		log.Fatal(err.Error())
@@ -129,8 +127,6 @@ func build(filename string, executableName string) {
 		"-o",
 		executableName,
 	)
-	compileCommand.Stdout = os.Stdout
-	compileCommand.Stderr = os.Stderr
 	err = compileCommand.Run()
 	if err != nil {
 		log.Fatal(err.Error())
