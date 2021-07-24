@@ -2,7 +2,27 @@ fun sum(a int, b int) int {
     return a + b
 }
 
+fun fib(n int) int {
+    if n < 2 {
+        return n
+    }
+
+    return fib(n-1) + fib(n-2)
+}
+
+fun retEarly() {
+    var i = 0
+    while true {
+        if i == 10 {
+            return
+        }
+
+        print i
+        i = i + 1
+    }
+}
+
 fun main() {
-    var total = sum(23, 45)
-    print total
+    print fib(20)
+    retEarly()
 }

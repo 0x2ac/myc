@@ -1,25 +1,30 @@
 package main
 
 import (
+	"fmt"
+
 	"github.com/kartiknair/myc/analyzer"
+	"github.com/kartiknair/myc/gen"
 	"github.com/kartiknair/myc/lexer"
 	"github.com/kartiknair/myc/parser"
 )
 
 func main() {
 	code := `
-struct Container {
-	value int
-}
-
-fun makeContainer() Container {
-	var s int|str = 24
-	return Container{value: s}
+fun retEarly() {
+	var i = 0
+	while true {
+		if i == 10 {
+			return
+		}
+		
+		print i
+		i = i + 1
+	}
 }
 
 fun main() {
-	var c = makeContainer()
-	print c
+	retEarly()
 }
 `
 	tokens := lexer.Lex(code)
@@ -28,6 +33,6 @@ fun main() {
 	analyzer.Analyze(parsed)
 	// gennedC := gen.C(parsed)
 	// fmt.Println(gennedC)
-	// gennedLLVM := gen.LLVM(parsed)
-	// fmt.Println(gennedLLVM)
+	gennedLLVM := gen.LLVM(parsed)
+	fmt.Println(gennedLLVM)
 }

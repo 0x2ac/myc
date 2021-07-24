@@ -19,6 +19,7 @@ var (
 	block                      *ir.Block
 	currentFunctionsDropBlock  *ir.Block
 	currentFunctionsReturnType ast.Type
+	currentFunctionsReturnPhi  *ir.InstPhi
 
 	panicDeclaration   *ir.Func
 	putcharDeclaration *ir.Func
@@ -222,19 +223,21 @@ func genStatement(stmt ast.Statement) {
 		}
 
 		if s.Identifier.Lexeme == "main" || s.ReturnType == nil {
-			returnBlock := block.Parent.NewBlock("")
 			if s.Identifier.Lexeme == "main" {
-				returnBlock.NewRet(constant.NewInt(types.I32, 0))
+				currentFunctionsDropBlock.NewRet(constant.NewInt(types.I32, 0))
 			} else if s.ReturnType == nil {
-				returnBlock.NewRet(nil)
+				currentFunctionsDropBlock.NewRet(nil)
 			}
-			currentFunctionsDropBlock.NewBr(returnBlock)
 			block.NewBr(currentFunctionsDropBlock)
+		} else {
+			retval := currentFunctionsDropBlock.NewPhi(currentFunctionsReturnPhi.Incs...)
+			currentFunctionsDropBlock.NewRet(retval)
 		}
 
 		block = nil
 		currentFunctionsDropBlock = nil
 		currentFunctionsReturnType = nil
+		currentFunctionsReturnPhi = nil
 
 		for _, param := range s.Parameters {
 			delete(namespace, param.Identifier.Lexeme)
@@ -292,21 +295,23 @@ func genStatement(stmt ast.Statement) {
 		s := stmt.(*ast.IfStatement)
 
 		condition := genExpression(s.Condition)
+
 		iftrueBlock := block.Parent.NewBlock("")
-		iffalseBlock := block.Parent.NewBlock("")
 		afterBlock := block.Parent.NewBlock("")
-		block.NewCondBr(condition, iftrueBlock, iffalseBlock)
+		if s.ElseBlock != nil {
+			iffalseBlock := block.Parent.NewBlock("")
+			block.NewCondBr(condition, iftrueBlock, iffalseBlock)
+			block = iffalseBlock
+			genStatement(s.ElseBlock)
+			if block.Term == nil {
+				block.NewBr(afterBlock)
+			}
+		} else {
+			block.NewCondBr(condition, iftrueBlock, afterBlock)
+		}
 
 		block = iftrueBlock
 		genStatement(&s.IfBlock)
-		if block.Term == nil {
-			block.NewBr(afterBlock)
-		}
-
-		block = iffalseBlock
-		if s.ElseBlock != nil {
-			genStatement(s.ElseBlock)
-		}
 		if block.Term == nil {
 			block.NewBr(afterBlock)
 		}
@@ -362,23 +367,36 @@ func genStatement(stmt ast.Statement) {
 	case *ast.ReturnStatement:
 		s := stmt.(*ast.ReturnStatement)
 
-		retBoxType, shouldReturnBox := currentFunctionsReturnType.(*ast.BoxType)
-
-		var retval value.Value
-
-		if shouldReturnBox && retBoxType.ElType.Equals(s.Expression.Type()) {
-			heapPtr := block.NewCall(mallocDeclaration, genSizeOf(s.Expression.Type()))
-			casted := block.NewBitCast(heapPtr, block.Parent.Sig.RetType)
-			block.NewStore(genExpression(s.Expression), casted)
-			retval = casted
+		if s.Expression == nil {
+			block.NewBr(currentFunctionsDropBlock)
 		} else {
-			retval = genExpression(s.Expression)
-		}
+			retBoxType, shouldReturnBox := currentFunctionsReturnType.(*ast.BoxType)
 
-		returnBlock := block.Parent.NewBlock("")
-		returnBlock.NewRet(retval)
-		currentFunctionsDropBlock.NewBr(returnBlock)
-		block.NewBr(currentFunctionsDropBlock)
+			var retval value.Value
+
+			if shouldReturnBox && retBoxType.ElType.Equals(s.Expression.Type()) {
+				heapPtr := block.NewCall(mallocDeclaration, genSizeOf(s.Expression.Type()))
+				casted := block.NewBitCast(heapPtr, block.Parent.Sig.RetType)
+				block.NewStore(genExpression(s.Expression), casted)
+				retval = casted
+			} else {
+				retval = genExpression(s.Expression)
+			}
+
+			returnBlock := block.Parent.NewBlock("")
+			returnBlock.NewRet(retval)
+
+			preReturnBlock := block.Parent.NewBlock("")
+			block.NewBr(preReturnBlock)
+			preReturnBlock.NewBr(currentFunctionsDropBlock)
+
+			inc := ir.NewIncoming(retval, preReturnBlock)
+			if currentFunctionsReturnPhi == nil {
+				currentFunctionsReturnPhi = ir.NewPhi(inc)
+			} else {
+				currentFunctionsReturnPhi.Incs = append(currentFunctionsReturnPhi.Incs, inc)
+			}
+		}
 	case *ast.ExpressionStatement:
 		s := stmt.(*ast.ExpressionStatement)
 		genExpression(s.Expression)
@@ -670,7 +688,7 @@ func genExpression(expr ast.Expression) value.Value {
 		}
 
 		called := block.NewCall(callee, args...)
-		if callee.(*ir.Func).Sig.RetType != nil {
+		if callee.(*ir.Func).Sig.RetType != types.Void {
 			result := block.NewAlloca(callee.(*ir.Func).Sig.RetType)
 			block.NewStore(called, result)
 			return block.NewLoad(callee.(*ir.Func).Sig.RetType, result)
