@@ -2,6 +2,7 @@ package llvmgen
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 
 	"github.com/kartiknair/myc/ast"
@@ -14,9 +15,10 @@ import (
 )
 
 var (
-	module                    *ir.Module
-	block                     *ir.Block
-	currentFunctionsDropBlock *ir.Block
+	module                     *ir.Module
+	block                      *ir.Block
+	currentFunctionsDropBlock  *ir.Block
+	currentFunctionsReturnType ast.Type
 
 	panicDeclaration   *ir.Func
 	putcharDeclaration *ir.Func
@@ -61,6 +63,17 @@ func genType(t ast.Type) types.Type {
 		ensureBoxOrPtrPrint(t, typ)
 		ensureBoxDrop(t.(*ast.BoxType), typ)
 		return typ
+	case *ast.SumType:
+		st := t.(*ast.SumType)
+		// floor(log2(maxNumber)) + 1
+		// ^ Gives you the number of bits required to store an
+		// unsigned decimal number in binary.
+		numBitsForOptions := math.Floor(math.Log2(float64(len(st.Options)-1))) + 1
+		indexType := types.NewInt(uint64(numBitsForOptions))
+		typ := types.NewStruct(indexType, types.I8Ptr)
+		ensureSumTypeDrop(st, typ)
+		ensureSumTypePrint(st, typ)
+		return typ
 	}
 
 	panic("Type node has invalid static type.")
@@ -93,6 +106,15 @@ func getTypeName(t ast.Type) string {
 		return fmt.Sprintf("ptr_%s", getTypeName(p.ElType))
 	} else if b, ok := t.(*ast.BoxType); ok {
 		return fmt.Sprintf("box_%s", getTypeName(b.ElType))
+	} else if sumType, ok := t.(*ast.SumType); ok {
+		cattedOptions := ""
+		for i, o := range sumType.Options {
+			cattedOptions += getTypeName(o)
+			if i != len(sumType.Options)-1 {
+				cattedOptions += "_"
+			}
+		}
+		return fmt.Sprintf("sum_%s", cattedOptions)
 	}
 
 	panic("Invalid type passed to `getTypeName`.")
@@ -212,6 +234,7 @@ func genStatement(stmt ast.Statement) {
 
 		block = nil
 		currentFunctionsDropBlock = nil
+		currentFunctionsReturnType = nil
 
 		for _, param := range s.Parameters {
 			delete(namespace, param.Identifier.Lexeme)
@@ -226,10 +249,35 @@ func genStatement(stmt ast.Statement) {
 		// TODO: Need assure that if s.Value == nil we have to 0-initialize the variable.
 
 		if s.Value != nil {
-			_, variableIsBox := s.Type.(*ast.BoxType)
-			_, valueIsBox := s.Value.Type().(*ast.BoxType)
+			variableBoxType, variableIsBox := s.Type.(*ast.BoxType)
 
-			if variableIsBox && !valueIsBox {
+			varSumType, variableIsSum := s.Type.(*ast.SumType)
+			_, valueIsSum := s.Value.Type().(*ast.SumType)
+
+			if variableIsSum && !valueIsSum {
+				typeIdxIntType := (genType(s.Type).(*types.StructType).Fields[0]).(*types.IntType)
+				typIdxPtr := block.NewGetElementPtr(
+					genType(s.Type), variable,
+					constant.NewInt(types.I32, 0),
+					constant.NewInt(types.I32, 0),
+				)
+				dataPtr := block.NewGetElementPtr(
+					genType(s.Type), variable,
+					constant.NewInt(types.I32, 0),
+					constant.NewInt(types.I32, 1),
+				)
+
+				foundIdx := -1
+				for i, o := range varSumType.Options {
+					if o.Equals(s.Value.Type()) {
+						foundIdx = i
+					}
+				}
+
+				block.NewStore(constant.NewInt(typeIdxIntType, int64(foundIdx)), typIdxPtr)
+				referenceOfValue := genExpression(s.Value).(*ir.InstLoad).Src
+				block.NewStore(block.NewBitCast(referenceOfValue, types.I8Ptr), dataPtr)
+			} else if variableIsBox && variableBoxType.ElType.Equals(s.Value.Type()) {
 				heapPtr := block.NewCall(mallocDeclaration, genSizeOf(s.Value.Type()))
 				casted := block.NewBitCast(heapPtr, genType(s.Type))
 				block.NewStore(genExpression(s.Value), casted)
@@ -314,12 +362,11 @@ func genStatement(stmt ast.Statement) {
 	case *ast.ReturnStatement:
 		s := stmt.(*ast.ReturnStatement)
 
-		_, shouldReturnBox := block.Parent.Sig.RetType.(*types.PointerType)
-		_, retvalIsBox := s.Expression.Type().(*ast.BoxType)
+		retBoxType, shouldReturnBox := currentFunctionsReturnType.(*ast.BoxType)
 
 		var retval value.Value
 
-		if shouldReturnBox && !retvalIsBox {
+		if shouldReturnBox && retBoxType.ElType.Equals(s.Expression.Type()) {
 			heapPtr := block.NewCall(mallocDeclaration, genSizeOf(s.Expression.Type()))
 			casted := block.NewBitCast(heapPtr, block.Parent.Sig.RetType)
 			block.NewStore(genExpression(s.Expression), casted)
@@ -355,8 +402,10 @@ func genExpression(expr ast.Expression) value.Value {
 		e := expr.(*ast.BinaryExpression)
 		switch e.Operator.Type {
 		case lexer.EQUAL:
-			_, targetIsBox := e.Left.Type().(*ast.BoxType)
-			_, valueIsBox := e.Right.Type().(*ast.BoxType)
+			targetBoxType, targetIsBox := e.Left.Type().(*ast.BoxType)
+
+			targetSumType, targetIsSum := e.Left.Type().(*ast.SumType)
+			_, valueIsSum := e.Right.Type().(*ast.SumType)
 
 			var target value.Value
 
@@ -372,7 +421,34 @@ func genExpression(expr ast.Expression) value.Value {
 				}
 			}
 
-			if targetIsBox && !valueIsBox {
+			if targetIsSum && !valueIsSum {
+				foundIdx := -1
+				for i, o := range targetSumType.Options {
+					if o.Equals(e.Right.Type()) {
+						foundIdx = i
+					}
+				}
+
+				typIdxPtr := block.NewGetElementPtr(
+					genType(targetSumType), target,
+					constant.NewInt(types.I32, 0),
+					constant.NewInt(types.I32, 0),
+				)
+				dataPtr := block.NewGetElementPtr(
+					genType(targetSumType), target,
+					constant.NewInt(types.I32, 0),
+					constant.NewInt(types.I32, 1),
+				)
+				block.NewStore(
+					constant.NewInt(
+						typIdxPtr.Type().(*types.PointerType).ElemType.(*types.IntType),
+						int64(foundIdx),
+					),
+					typIdxPtr,
+				)
+				block.NewStore(block.NewBitCast(genExpression(e.Right).(*ir.InstLoad).Src, types.I8Ptr), dataPtr)
+				return block.NewLoad(genType(targetSumType), target)
+			} else if targetIsBox && targetBoxType.ElType.Equals(e.Right.Type()) {
 				// We dereference the heap pointer and copy the value instead
 				loadedTarget := block.NewLoad(genType(e.Left.Type()), target)
 				block.NewStore(genExpression(e.Right), loadedTarget)
@@ -535,10 +611,12 @@ func genExpression(expr ast.Expression) value.Value {
 		args := []value.Value{}
 		for i, arg := range e.Arguments {
 			paramBoxType, paramIsBox := e.Callee.Type().(*ast.FunctionType).Parameters[i].(*ast.BoxType)
-			_, argIsBox := arg.Type().(*ast.BoxType)
+
+			paramSumType, paramIsSum := e.Callee.Type().(*ast.FunctionType).Parameters[i].(*ast.SumType)
+			_, argIsSum := arg.Type().(*ast.SumType)
 
 			// TODO: also need to handle a no-copy rvalue
-			if paramIsBox && !argIsBox {
+			if paramIsBox && paramBoxType.ElType.Equals(arg.Type()) {
 				// Assigning an unboxed value to a box. Example:
 				//
 				//     fun printBox(b ~int) {
@@ -546,9 +624,39 @@ func genExpression(expr ast.Expression) value.Value {
 				//     }
 				//     printBox(56) // we are genning this
 				//
-				temporaryBox := block.NewCall(mallocDeclaration, genSizeOf(arg.Type()))
-				args = append(args, block.NewBitCast(temporaryBox, genType(paramBoxType)))
-				currentFunctionsDropBlock.NewCall(getDropFunc(paramBoxType), temporaryBox)
+				tempBox := block.NewCall(mallocDeclaration, genSizeOf(arg.Type()))
+				args = append(args, block.NewBitCast(tempBox, genType(paramBoxType)))
+				currentFunctionsDropBlock.NewCall(getDropFunc(paramBoxType), tempBox)
+			} else if paramIsSum && !argIsSum {
+				tempSumBox := block.NewAlloca(genType(paramSumType))
+
+				typIdxPtr := block.NewGetElementPtr(
+					genType(paramSumType), tempSumBox,
+					constant.NewInt(types.I32, 0),
+					constant.NewInt(types.I32, 0),
+				)
+				dataPtr := block.NewGetElementPtr(
+					genType(paramSumType), tempSumBox,
+					constant.NewInt(types.I32, 0),
+					constant.NewInt(types.I32, 1),
+				)
+
+				foundIdx := -1
+				for i, o := range paramSumType.Options {
+					if o.Equals(arg.Type()) {
+						foundIdx = i
+					}
+				}
+
+				block.NewStore(
+					constant.NewInt(
+						typIdxPtr.Type().(*types.PointerType).ElemType.(*types.IntType),
+						int64(foundIdx),
+					),
+					typIdxPtr,
+				)
+				block.NewStore(block.NewBitCast(genExpression(arg).(*ir.InstLoad).Src, types.I8Ptr), dataPtr)
+				args = append(args, block.NewLoad(genType(paramSumType), tempSumBox))
 			} else {
 				args = append(args, genExpression(arg))
 			}
@@ -561,7 +669,13 @@ func genExpression(expr ast.Expression) value.Value {
 			panic("Can only generate variables as calle.")
 		}
 
-		return block.NewCall(callee, args...)
+		called := block.NewCall(callee, args...)
+		if callee.(*ir.Func).Sig.RetType != nil {
+			result := block.NewAlloca(callee.(*ir.Func).Sig.RetType)
+			block.NewStore(called, result)
+			return block.NewLoad(callee.(*ir.Func).Sig.RetType, result)
+		}
+		return called
 	case *ast.VariableExpression:
 		e := expr.(*ast.VariableExpression)
 		resolvedVariable := namespace[e.Identifier.Lexeme]
@@ -652,6 +766,73 @@ func genExpression(expr ast.Expression) value.Value {
 		} else {
 			panic("internal error: index expression on non-load instruction.")
 		}
+	case *ast.IsExpression:
+		e := expr.(*ast.IsExpression)
+
+		idxOfComparedType := -1
+		for i, o := range e.Expression.Type().(*ast.SumType).Options {
+			if o.Equals(e.ComparedType) {
+				idxOfComparedType = i
+			}
+		}
+
+		left := genExpression(e.Expression)
+
+		if load, ok := left.(*ir.InstLoad); ok {
+			left = load.Src
+		}
+
+		leftIdx := block.NewGetElementPtr(genType(e.Expression.Type()), left, constant.NewInt(types.I32, 0), constant.NewInt(types.I32, 0))
+		idxIntType := leftIdx.Type().(*types.PointerType).ElemType.(*types.IntType)
+		loadedIdx := block.NewLoad(idxIntType, leftIdx)
+
+		comparison := block.NewICmp(enum.IPredEQ, loadedIdx, constant.NewInt(idxIntType, int64(idxOfComparedType)))
+		return comparison
+	case *ast.AsExpression:
+		e := expr.(*ast.AsExpression)
+
+		idxOfTargetType := -1
+		for i, o := range e.Expression.Type().(*ast.SumType).Options {
+			if o.Equals(e.TargetType) {
+				idxOfTargetType = i
+			}
+		}
+
+		left := genExpression(e.Expression)
+
+		if load, ok := left.(*ir.InstLoad); ok {
+			left = load.Src
+		}
+
+		leftIdx := block.NewGetElementPtr(genType(e.Expression.Type()), left, constant.NewInt(types.I32, 0), constant.NewInt(types.I32, 0))
+		idxIntType := leftIdx.Type().(*types.PointerType).ElemType.(*types.IntType)
+		loadedIdx := block.NewLoad(idxIntType, leftIdx)
+
+		comparison := block.NewICmp(enum.IPredEQ, loadedIdx, constant.NewInt(idxIntType, int64(idxOfTargetType)))
+
+		castOkBlock := block.Parent.NewBlock("")
+		castFailedBlock := block.Parent.NewBlock("")
+		block.NewCondBr(comparison, castOkBlock, castFailedBlock)
+
+		errMessage := "runtime-error: sum-type cast failed\x0A\x00"
+		errMessageDef := module.NewGlobalDef("", constant.NewCharArrayFromString(errMessage))
+		castFailedBlock.NewCall(panicDeclaration, constant.NewGetElementPtr(
+			types.NewArray(uint64(len(errMessage)), types.I8),
+			errMessageDef,
+			constant.NewInt(types.I32, 0),
+			constant.NewInt(types.I32, 0),
+		))
+		castFailedBlock.NewUnreachable()
+
+		block = castOkBlock
+
+		castedVariable := block.NewAlloca(genType(e.TargetType))
+		dataPtr := block.NewGetElementPtr(genType(e.Expression.Type()), left, constant.NewInt(types.I32, 0), constant.NewInt(types.I32, 1))
+		loadedPtr := block.NewLoad(types.I8Ptr, dataPtr)
+		value := block.NewLoad(genType(e.TargetType), block.NewBitCast(loadedPtr, types.NewPointer(genType(e.TargetType))))
+		block.NewStore(value, castedVariable)
+
+		return block.NewLoad(genType(e.TargetType), castedVariable)
 	case *ast.CompositeLiteral:
 		e := expr.(*ast.CompositeLiteral)
 		st := e.Typ.(*ast.StructType)
@@ -686,13 +867,51 @@ func genExpression(expr ast.Expression) value.Value {
 			)
 
 			boxType, memberIsBox := st.Members[i].Type.(*ast.BoxType)
-			_, initIsBox := init.Type().(*ast.BoxType)
 
-			if memberIsBox && !initIsBox {
+			sumType, memberIsSum := st.Members[i].Type.(*ast.SumType)
+			_, initIsSum := init.Type().(*ast.SumType)
+
+			if memberIsBox && boxType.ElType.Equals(init.Type()) {
 				box := block.NewCall(mallocDeclaration, genSizeOf(boxType.ElType))
 				casted := block.NewBitCast(box, genType(boxType))
 				block.NewStore(genExpression(init), casted)
 				block.NewStore(casted, tmp)
+			} else if memberIsSum && !initIsSum {
+				tempSumBox := block.NewAlloca(genType(sumType))
+
+				typIdxPtr := block.NewGetElementPtr(
+					genType(sumType), tempSumBox,
+					constant.NewInt(types.I32, 0),
+					constant.NewInt(types.I32, 0),
+				)
+				dataPtr := block.NewGetElementPtr(
+					genType(sumType), tempSumBox,
+					constant.NewInt(types.I32, 0),
+					constant.NewInt(types.I32, 1),
+				)
+
+				foundIdx := -1
+				for i, o := range sumType.Options {
+					if o.Equals(init.Type()) {
+						foundIdx = i
+					}
+				}
+
+				block.NewStore(
+					constant.NewInt(
+						typIdxPtr.Type().(*types.PointerType).ElemType.(*types.IntType),
+						int64(foundIdx),
+					),
+					typIdxPtr,
+				)
+				block.NewStore(
+					block.NewBitCast(
+						genExpression(init).(*ir.InstLoad).Src,
+						types.I8Ptr,
+					),
+					dataPtr,
+				)
+				block.NewStore(block.NewLoad(genType(sumType), tempSumBox), tmp)
 			} else {
 				block.NewStore(genExpression(init), tmp)
 			}
@@ -704,6 +923,7 @@ func genExpression(expr ast.Expression) value.Value {
 		local := block.NewAlloca(genType(e.Type()))
 		eltype := e.Type().(*ast.SliceType).ElType
 		elBoxType, elTypeIsBox := eltype.(*ast.BoxType)
+		elSumType, elTypeIsSum := eltype.(*ast.SumType)
 
 		buffer := block.NewGetElementPtr(
 			genType(e.Type()),
@@ -740,14 +960,50 @@ func genExpression(expr ast.Expression) value.Value {
 		block.NewStore(casted, buffer)
 
 		for i, value := range e.Expressions {
-			_, valueIsBox := value.Type().(*ast.BoxType)
+			_, valueIsSum := value.Type().(*ast.SumType)
 
 			loadedBuffer := block.NewLoad(types.NewPointer(genType(eltype)), buffer)
 			pointerToElement := block.NewGetElementPtr(genType(eltype), loadedBuffer, constant.NewInt(types.I64, int64(i)))
 
-			if elTypeIsBox && !valueIsBox {
+			if elTypeIsBox && elBoxType.ElType.Equals(value.Type()) {
 				temporaryBox := block.NewCall(mallocDeclaration, genSizeOf(value.Type()))
 				block.NewStore(block.NewBitCast(temporaryBox, genType(elBoxType)), pointerToElement)
+			} else if elTypeIsSum && !valueIsSum {
+				tempSumBox := block.NewAlloca(genType(elSumType))
+
+				typIdxPtr := block.NewGetElementPtr(
+					genType(elSumType), tempSumBox,
+					constant.NewInt(types.I32, 0),
+					constant.NewInt(types.I32, 0),
+				)
+				dataPtr := block.NewGetElementPtr(
+					genType(elSumType), tempSumBox,
+					constant.NewInt(types.I32, 0),
+					constant.NewInt(types.I32, 1),
+				)
+
+				foundIdx := -1
+				for i, o := range elSumType.Options {
+					if o.Equals(value.Type()) {
+						foundIdx = i
+					}
+				}
+
+				block.NewStore(
+					constant.NewInt(
+						typIdxPtr.Type().(*types.PointerType).ElemType.(*types.IntType),
+						int64(foundIdx),
+					),
+					typIdxPtr,
+				)
+				block.NewStore(
+					block.NewBitCast(
+						genExpression(value).(*ir.InstLoad).Src,
+						types.I8Ptr,
+					),
+					dataPtr,
+				)
+				block.NewStore(block.NewLoad(genType(elSumType), tempSumBox), pointerToElement)
 			} else {
 				block.NewStore(genExpression(value), pointerToElement)
 			}
@@ -1131,6 +1387,123 @@ func ensureBoxDrop(boxType *ast.BoxType, llvmType types.Type) {
 	boxDropBlock.NewCall(freeDeclaration, casted)
 	boxDropBlock.NewStore(constant.NewNull(llvmType.(*types.PointerType)), selfParam)
 	boxDropBlock.NewRet(nil)
+}
+
+func ensureSumTypePrint(sumType *ast.SumType, llvmType types.Type) {
+	cattedOptions := ""
+	for i, o := range sumType.Options {
+		cattedOptions += getTypeName(o)
+		if i != len(sumType.Options)-1 {
+			cattedOptions += "_"
+		}
+	}
+	sumPrintFuncName := fmt.Sprintf("myc__sum_%s_print", cattedOptions)
+
+	for _, f := range module.Funcs {
+		if f.Name() == sumPrintFuncName {
+			return
+		}
+	}
+
+	selfParam := ir.NewParam("", types.NewPointer(llvmType))
+
+	sumPrint := module.NewFunc(sumPrintFuncName, types.Void, selfParam)
+	sumPrintBlock := sumPrint.NewBlock("")
+
+	typIdxPtr := sumPrintBlock.NewGetElementPtr(llvmType, selfParam, constant.NewInt(types.I32, 0), constant.NewInt(types.I32, 0))
+	dataPtr := sumPrintBlock.NewGetElementPtr(llvmType, selfParam, constant.NewInt(types.I32, 0), constant.NewInt(types.I32, 1))
+	typIdxIntType := typIdxPtr.Type().(*types.PointerType).ElemType.(*types.IntType)
+
+	invalidTypIdxBlock := sumPrint.NewBlock("")
+	var cases []*ir.Case
+	for i, o := range sumType.Options {
+		caseBlock := sumPrint.NewBlock("")
+
+		if _, ok := genType(o).(*types.StructType); ok {
+			caseBlock.NewCall(
+				getPrintFuncForType(o),
+				caseBlock.NewBitCast(
+					caseBlock.NewLoad(types.I8Ptr, dataPtr),
+					types.NewPointer(genType(o)),
+				),
+			)
+		} else {
+			castedPtr := caseBlock.NewBitCast(
+				caseBlock.NewLoad(types.I8Ptr, dataPtr),
+				types.NewPointer(genType(o)),
+			)
+			valueFromPtr := caseBlock.NewLoad(genType(o), castedPtr)
+			caseBlock.NewCall(getPrintFuncForType(o), valueFromPtr)
+		}
+
+		caseBlock.NewRet(nil)
+		cases = append(cases, ir.NewCase(constant.NewInt(typIdxIntType, int64(i)), caseBlock))
+	}
+	sumPrintBlock.NewSwitch(sumPrintBlock.NewLoad(typIdxIntType, typIdxPtr), invalidTypIdxBlock, cases...)
+
+	errMessage := "runtime-error: sum-type has invalid index\x0A\x00"
+	errMessageDef := module.NewGlobalDef("", constant.NewCharArrayFromString(errMessage))
+	invalidTypIdxBlock.NewCall(panicDeclaration, constant.NewGetElementPtr(
+		types.NewArray(uint64(len(errMessage)), types.I8),
+		errMessageDef,
+		constant.NewInt(types.I32, 0),
+		constant.NewInt(types.I32, 0),
+	))
+	invalidTypIdxBlock.NewUnreachable()
+}
+
+func ensureSumTypeDrop(sumType *ast.SumType, llvmType types.Type) {
+	cattedOptions := ""
+	for i, o := range sumType.Options {
+		cattedOptions += getTypeName(o)
+		if i != len(sumType.Options)-1 {
+			cattedOptions += "_"
+		}
+	}
+	sumDropFuncName := fmt.Sprintf("myc__sum_%s_drop", cattedOptions)
+
+	for _, f := range module.Funcs {
+		if f.Name() == sumDropFuncName {
+			return
+		}
+	}
+
+	selfParam := ir.NewParam("", types.NewPointer(llvmType))
+
+	sumDrop := module.NewFunc(sumDropFuncName, types.Void, selfParam)
+	sumDropBlock := sumDrop.NewBlock("")
+
+	typIdxPtr := sumDropBlock.NewGetElementPtr(llvmType, selfParam, constant.NewInt(types.I32, 0), constant.NewInt(types.I32, 0))
+	dataPtr := sumDropBlock.NewGetElementPtr(llvmType, selfParam, constant.NewInt(types.I32, 0), constant.NewInt(types.I32, 1))
+	typIdxIntType := typIdxPtr.Type().(*types.PointerType).ElemType.(*types.IntType)
+
+	invalidTypIdxBlock := sumDrop.NewBlock("")
+	var cases []*ir.Case
+	for i, o := range sumType.Options {
+		caseBlock := sumDrop.NewBlock("")
+		if !o.IsCopyable() {
+			caseBlock.NewCall(
+				getDropFunc(o),
+				caseBlock.NewBitCast(
+					caseBlock.NewLoad(types.I8Ptr, dataPtr),
+					types.NewPointer(genType(o)),
+				),
+			)
+		}
+		caseBlock.NewRet(nil)
+		cases = append(cases, ir.NewCase(constant.NewInt(typIdxIntType, int64(i)), caseBlock))
+	}
+	sumDropBlock.NewSwitch(sumDropBlock.NewLoad(typIdxIntType, typIdxPtr), invalidTypIdxBlock, cases...)
+
+	errMessage := "runtime-error: sum-type has invalid index\x0A\x00"
+	errMessageDef := module.NewGlobalDef("", constant.NewCharArrayFromString(errMessage))
+	invalidTypIdxBlock.NewCall(panicDeclaration, constant.NewGetElementPtr(
+		types.NewArray(uint64(len(errMessage)), types.I8),
+		errMessageDef,
+		constant.NewInt(types.I32, 0),
+		constant.NewInt(types.I32, 0),
+	))
+	invalidTypIdxBlock.NewUnreachable()
 }
 
 func createPrimitiveDrops() {

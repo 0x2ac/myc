@@ -85,6 +85,9 @@ func isAssignable(valueType ast.Type, targetType ast.Type, valueIsLvalue bool, o
 	}
 
 	if !valueType.Equals(targetType) {
+		targetSumT, targetIsSumType := targetType.(*ast.SumType)
+		valueSumT, valueIsSumType := valueType.(*ast.SumType)
+
 		if p, ok := targetType.(*ast.PointerType); ok {
 			if _, ok := valueType.(*ast.PointerType); !ok {
 				return errors.New(fmt.Sprintf(
@@ -100,9 +103,7 @@ func isAssignable(valueType ast.Type, targetType ast.Type, valueIsLvalue bool, o
 					valueType.String(), targetType.String(),
 				))
 			}
-		}
-
-		if b, ok := targetType.(*ast.BoxType); ok {
+		} else if b, ok := targetType.(*ast.BoxType); ok {
 			// Boxes can have unboxed variables assigned to them:
 			if !b.ElType.Equals(valueType) {
 				return errors.New(fmt.Sprintf(
@@ -110,12 +111,7 @@ func isAssignable(valueType ast.Type, targetType ast.Type, valueIsLvalue bool, o
 					valueType.String(), targetType.String(),
 				))
 			}
-		}
-
-		targetSumT, targetIsSumType := targetType.(*ast.SumType)
-		valueSumT, valueIsSumType := valueType.(*ast.SumType)
-
-		if targetIsSumType && !valueIsSumType {
+		} else if targetIsSumType && !valueIsSumType {
 			// Sum types can have any of their options assigned to them
 			eTypeInOptions := false
 			for _, o := range targetSumT.Options {
@@ -190,6 +186,7 @@ func resolveStructType(st *ast.StructType) {
 	t, err := typespace.get(st.Name)
 
 	if err != nil {
+		// TODO: make this a reported error instead!
 		panic(fmt.Sprintf("Could not resolve struct type: '%s'", st.Name))
 	}
 
@@ -544,11 +541,15 @@ func analyzeExpression(expr ast.Expression) {
 			analyzeExpression(initializer)
 			if elType == nil {
 				elType = initializer.Type()
-			}
-
-			err := isAssignable(initializer.Type(), elType, isLvalue(initializer))
-			if err != nil {
-				analysisError(e.LeftBracketToken, "Mixing types within slice literal. "+err.Error())
+			} else {
+				err := isAssignable(initializer.Type(), elType, isLvalue(initializer))
+				if err != nil {
+					if s, ok := elType.(*ast.SumType); ok {
+						s.Options = append(s.Options, initializer.Type())
+					} else {
+						elType = &ast.SumType{Options: []ast.Type{elType, initializer.Type()}}
+					}
+				}
 			}
 		}
 
@@ -556,6 +557,9 @@ func analyzeExpression(expr ast.Expression) {
 	case *ast.ReferenceOf:
 		e := expr.(*ast.ReferenceOf)
 		analyzeExpression(e.Target)
+		if e.Target.Type() == nil {
+			analysisError(e.AndToken, "Cannot take reference of void expression.")
+		}
 		e.Typ = &ast.PointerType{ElType: e.Target.Type()}
 	case *ast.Dereference:
 		e := expr.(*ast.Dereference)

@@ -1,0 +1,17 @@
+fun addFive(n int) int {
+    return n + 5
+}
+
+fun main() {
+    var s int|str = "hello"
+	print s
+	s = 56
+	print s
+
+	if s is int {
+		print "s is an integer!!"
+        print addFive(s as int)
+	} else {
+		print "s is a str then :)"
+	}
+}
