@@ -182,21 +182,35 @@ func Analyze(statements []ast.Statement) {
 	}
 }
 
-func resolveStructType(st *ast.StructType) {
-	t, err := typespace.get(st.Name)
+// Makes sure that a programmer-provided type annotation is correct
+func analyzeType(t ast.Type) error {
+	if sumType, ok := t.(*ast.SumType); ok {
+		for _, o := range sumType.Options {
+			e := analyzeType(o)
+			if e != nil {
+				return e
+			}
+		}
+	} else if boxType, ok := t.(*ast.BoxType); ok {
+		return analyzeType(boxType.ElType)
+	} else if ptrType, ok := t.(*ast.PointerType); ok {
+		return analyzeType(ptrType.ElType)
+	} else if structType, ok := t.(*ast.StructType); ok {
+		resolved, err := typespace.get(structType.Name)
+		if err != nil {
+			return err
+		}
 
-	if err != nil {
-		// TODO: make this a reported error instead!
-		panic(fmt.Sprintf("Could not resolve struct type: '%s'", st.Name))
-	}
-
-	*st = *t.(*ast.StructType)
-
-	for _, m := range st.Members {
-		if _, ok := m.Type.(*ast.StructType); ok {
-			resolveStructType(m.Type.(*ast.StructType))
+		t = resolved
+		for _, m := range t.(*ast.StructType).Members {
+			e := analyzeType(m.Type)
+			if e != nil {
+				return e
+			}
 		}
 	}
+
+	return nil
 }
 
 func analyzeExpression(expr ast.Expression) {
@@ -365,8 +379,6 @@ func analyzeExpression(expr ast.Expression) {
 			)
 		}
 
-		resolveStructType(structType)
-
 		foundMember, ok := structType.GetMember(e.Identifier.Lexeme)
 		if !ok {
 			analysisError(
@@ -411,6 +423,8 @@ func analyzeExpression(expr ast.Expression) {
 		e := expr.(*ast.AsExpression)
 
 		analyzeExpression(e.Expression)
+		analyzeType(e.TargetType)
+
 		if sumType, ok := e.Expression.Type().(*ast.SumType); !ok {
 			analysisError(e.AsToken, "Can only type cast sum-type expressions.")
 		} else {
@@ -435,6 +449,8 @@ func analyzeExpression(expr ast.Expression) {
 		e := expr.(*ast.IsExpression)
 
 		analyzeExpression(e.Expression)
+		analyzeType(e.ComparedType)
+
 		if sumType, ok := e.Expression.Type().(*ast.SumType); !ok {
 			analysisError(e.IsToken, "Can only type check sum-type expressions.")
 		} else {
@@ -458,7 +474,11 @@ func analyzeExpression(expr ast.Expression) {
 	case *ast.CompositeLiteral:
 		e := expr.(*ast.CompositeLiteral)
 		r := e.Typ.(*ast.StructType)
-		resolveStructType(r)
+
+		err := analyzeType(e.Typ)
+		if err != nil {
+			analysisError(e.LeftBraceToken, "Invalid type in composite literal. "+err.Error())
+		}
 
 		if e.NamedInitializers == nil && e.UnnamedInitializers == nil {
 			analysisError(
@@ -625,9 +645,15 @@ func analyzeStatement(statement ast.Statement) {
 		onlyTypeParams := []ast.Type{}
 		for _, p := range s.Parameters {
 			onlyTypeParams = append(onlyTypeParams, p.Type)
-			if st, ok := p.Type.(*ast.StructType); ok {
-				resolveStructType(st)
+			err := analyzeType(p.Type)
+			if err != nil {
+				analysisError(p.Identifier, "Invalid parameter type. "+err.Error())
 			}
+		}
+
+		err := analyzeType(s.ReturnType)
+		if err != nil {
+			analysisError(s.Identifier, "Invalid parameter type. "+err.Error())
 		}
 
 		signature := ast.FunctionType{
@@ -635,7 +661,7 @@ func analyzeStatement(statement ast.Statement) {
 			ReturnType: s.ReturnType,
 		}
 
-		err := namespace.declare(s.Identifier.Lexeme, &signature)
+		err = namespace.declare(s.Identifier.Lexeme, &signature)
 		if err != nil {
 			analysisError(s.Identifier, err.Error())
 		}
@@ -669,13 +695,12 @@ func analyzeStatement(statement ast.Statement) {
 		s := statement.(*ast.StructDeclaration)
 
 		for _, m := range s.Members {
-			if st, ok := m.Type.(*ast.StructType); ok {
-				if st.Name == s.Identifier.Lexeme {
-					analysisError(m.Identifier, "Cannot nest struct type as size would be unknown.")
-				}
+			err := analyzeType(m.Type)
+			if err != nil {
+				analysisError(m.Identifier, "Invalid type for struct member. "+err.Error())
+			}
 
-				resolveStructType(st)
-			} else if _, ok := m.Type.(*ast.PointerType); ok {
+			if _, ok := m.Type.(*ast.PointerType); ok {
 				analysisError(m.Identifier, "Cannot use pointer as struct field.\n  help: try using a box instead.")
 			}
 		}
@@ -719,8 +744,12 @@ func analyzeStatement(statement ast.Statement) {
 			s.Type = s.Value.Type()
 		} else if s.Type != nil && s.Value != nil {
 			// e.g. var foo string = 42
-			err := isAssignable(s.Value.Type(), s.Type, isLvalue(s.Value))
+			err := analyzeType(s.Type)
+			if err != nil {
+				analysisError(s.Identifier, "Invalid variable type. "+err.Error())
+			}
 
+			err = isAssignable(s.Value.Type(), s.Type, isLvalue(s.Value))
 			if err != nil {
 				analysisError(s.Identifier, "Initial expression is not valid for provided type. "+err.Error())
 			}
