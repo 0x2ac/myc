@@ -319,6 +319,7 @@ type Parameter struct {
 }
 
 type FunctionDeclaration struct {
+	Exported   bool
 	Identifier token.Token
 	Parameters []Parameter
 	ReturnType Type
@@ -326,6 +327,7 @@ type FunctionDeclaration struct {
 }
 
 type StructDeclaration struct {
+	Exported   bool
 	Identifier token.Token
 	Members    []StructMember
 }
@@ -380,6 +382,11 @@ type ExpressionStatement struct {
 	Expression Expression
 }
 
+type ImportStatement struct {
+	PathToken  token.Token
+	Identifier *token.Token
+}
+
 type BlockStatement struct {
 	Statements []Statement
 }
@@ -392,6 +399,7 @@ func (*WhileStatement) isStatement()      {}
 func (*PrintStatement) isStatement()      {}
 func (*ReturnStatement) isStatement()     {}
 func (*ExpressionStatement) isStatement() {}
+func (*ImportStatement) isStatement()     {}
 func (*BlockStatement) isStatement()      {}
 
 type Expression interface {

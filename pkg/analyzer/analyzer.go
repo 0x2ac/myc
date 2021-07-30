@@ -3,9 +3,13 @@ package analyzer
 import (
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"log"
+	"path/filepath"
 
 	"github.com/kartiknair/myc/pkg/ast"
+	"github.com/kartiknair/myc/pkg/lexer"
+	"github.com/kartiknair/myc/pkg/parser"
 	"github.com/kartiknair/myc/pkg/token"
 )
 
@@ -378,9 +382,10 @@ func (a *Analyzer) analyzeExpression(expr ast.Expression) {
 		a.analyzeExpression(e.Expression)
 
 		structType, isStruct := e.Expression.Type().(*ast.StructType)
+		moduleType, isModule := e.Expression.Type().(*ast.Module)
 
 		// e.g. 32.value, "hello".foo, etc.
-		if !isStruct {
+		if !isStruct && !isModule {
 			a.analysisError(
 				e.Identifier,
 				fmt.Sprintf(
@@ -390,19 +395,32 @@ func (a *Analyzer) analyzeExpression(expr ast.Expression) {
 			)
 		}
 
-		foundMember, ok := structType.GetMember(e.Identifier.Lexeme)
-		if !ok {
-			a.analysisError(
-				e.Identifier,
-				fmt.Sprintf(
-					"Type: '%s' does not have field: '%s'.",
-					structType.Name,
-					e.Identifier.Lexeme,
-				),
-			)
-		}
+		if isStruct {
+			foundMember, ok := structType.GetMember(e.Identifier.Lexeme)
+			if !ok {
+				a.analysisError(
+					e.Identifier,
+					fmt.Sprintf(
+						"Type: '%s' does not have field: '%s'.",
+						structType.Name,
+						e.Identifier.Lexeme,
+					),
+				)
+			}
 
-		e.Typ = foundMember.Type
+			e.Typ = foundMember.Type
+		} else {
+			foundDeclType, ok := moduleType.Exports[e.Identifier.Lexeme]
+
+			if !ok {
+				a.analysisError(e.Identifier, fmt.Sprintf(
+					"Module: '%s' does not export member: '%s'.",
+					moduleType.Path, e.Identifier.Lexeme,
+				))
+			}
+
+			e.Typ = foundDeclType
+		}
 	case *ast.IndexExpression:
 		e := expr.(*ast.IndexExpression)
 		a.analyzeExpression(e.Expression)
@@ -703,6 +721,8 @@ func (a *Analyzer) analyzeStatement(statement ast.Statement) {
 				),
 			)
 		}
+
+		a.Module.Exports[s.Identifier.Lexeme] = &signature
 	case *ast.StructDeclaration:
 		s := statement.(*ast.StructDeclaration)
 
@@ -726,6 +746,8 @@ func (a *Analyzer) analyzeStatement(statement ast.Statement) {
 		if err != nil {
 			a.analysisError(s.Identifier, fmt.Sprintf("Type name '%s' is already in use.", s.Identifier.Lexeme))
 		}
+
+		a.Module.Exports[s.Identifier.Lexeme] = &st
 	case *ast.VariableDeclaration:
 		s := statement.(*ast.VariableDeclaration)
 
@@ -881,6 +903,25 @@ func (a *Analyzer) analyzeStatement(statement ast.Statement) {
 		}
 
 		a.analyzeExpression(s.Expression)
+	case *ast.ImportStatement:
+		s := statement.(*ast.ImportStatement)
+
+		if !isTopLevel {
+			a.analysisError(s.PathToken, "Import statement must be top level.")
+		}
+
+		if s.Identifier == nil {
+			filename := filepath.Base(s.PathToken.Lexeme)
+			filename = filename[:len(filename)-len(filepath.Ext(filename))]
+			s.Identifier = &token.Token{Lexeme: filename}
+		}
+
+		module, err := resolveModuleFromPath(s.PathToken.Lexeme)
+		if err != nil {
+			a.analysisError(s.PathToken, "Failed while importing module. "+err.Error())
+		}
+
+		a.namespace.Declare(s.Identifier.Lexeme, module)
 	case *ast.BlockStatement:
 		oldScope := a.namespace // copy the old scope
 		a.namespace = NewSymbolTableFromEnclosing(a.namespace)
@@ -892,4 +933,23 @@ func (a *Analyzer) analyzeStatement(statement ast.Statement) {
 
 		a.namespace = oldScope
 	}
+}
+
+func resolveModuleFromPath(path string) (*ast.Module, error) {
+	contents, err := ioutil.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	m := ast.Module{
+		Path:    path,
+		Source:  string(contents),
+		Exports: make(map[string]ast.Type),
+	}
+
+	lexer.Lex(&m)
+	parser.Parse(&m)
+	Analyze(&m)
+
+	return &m, nil
 }

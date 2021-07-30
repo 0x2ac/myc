@@ -1,0 +1,5 @@
+import "./math"
+
+fun main() {
+    print math.add(45, 67)
+}

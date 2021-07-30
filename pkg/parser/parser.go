@@ -3,6 +3,7 @@ package parser
 import (
 	"fmt"
 	"log"
+	"path/filepath"
 
 	"github.com/kartiknair/myc/pkg/ast"
 	"github.com/kartiknair/myc/pkg/token"
@@ -234,6 +235,45 @@ func (p *Parser) parseStatement() ast.Statement {
 			Expressions: exprs,
 			PrintToken:  t,
 		}
+	} else if t.Type == token.IMPORT {
+		// ImportStatement
+		p.current++
+		pathToken := p.expect(token.STRING, "Expect path to import from.")
+
+		absPath, err := filepath.Abs(pathToken.Lexeme)
+		if err != nil {
+			panic(err.Error())
+		}
+		pathToken.Lexeme = absPath
+
+		var alias *token.Token
+		if p.peek(0).Type == token.SEMICOLON {
+			alias = nil
+		} else {
+			ident := p.expect(token.IDENTIFIER, "Only identifier is allowed after import path.")
+			alias = &ident
+		}
+
+		p.expect(token.SEMICOLON, "Expect semicolon after import statement.")
+
+		return &ast.ImportStatement{
+			PathToken:  pathToken,
+			Identifier: alias,
+		}
+	} else if t.Type == token.EXPORT {
+		// Exported Declaration
+		p.current++
+		decl := p.parseStatement()
+
+		if structDecl, ok := decl.(*ast.StructDeclaration); ok {
+			structDecl.Exported = true
+			return structDecl
+		} else if funDecl, ok := decl.(*ast.FunctionDeclaration); ok {
+			funDecl.Exported = true
+			return funDecl
+		}
+
+		p.parseError(p.peek(0), "Cannot export non-declaration statement.")
 	} else if t.Type == token.LEFT_BRACE {
 		// BlockStatement
 		return p.parseBlock()

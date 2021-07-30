@@ -22,6 +22,8 @@ const (
 	WHILE
 	AS
 	IS
+	IMPORT
+	EXPORT
 	KEYWORD_END
 
 	LEFT_PAREN
@@ -91,4 +93,6 @@ var Keywords = [...]string{
 	"while",
 	"as",
 	"is",
+	"import",
+	"export",
 }
