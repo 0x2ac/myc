@@ -3,7 +3,7 @@ package cgen
 import (
 	"fmt"
 
-	"github.com/kartiknair/myc/ast"
+	"github.com/kartiknair/myc/pkg/ast"
 )
 
 func genType(t ast.Type) string {
@@ -357,9 +357,9 @@ func genLiteral(literal *ast.Literal) string {
 	return literal.LiteralValue
 }
 
-func Gen(statements []ast.Statement) string {
+func Gen(m *ast.Module) string {
 	result := ""
-	for _, statement := range statements {
+	for _, statement := range m.Statements {
 		result += genStatement(statement)
 	}
 	return result
