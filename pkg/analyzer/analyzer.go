@@ -215,8 +215,8 @@ func (a *Analyzer) analyzeType(t ast.Type) error {
 			return err
 		}
 
-		t = resolved
-		for _, m := range t.(*ast.StructType).Members {
+		*structType = *resolved.(*ast.StructType)
+		for _, m := range structType.Members {
 			e := a.analyzeType(m.Type)
 			if e != nil {
 				return e
@@ -502,12 +502,13 @@ func (a *Analyzer) analyzeExpression(expr ast.Expression) {
 		e.Typ = &ast.Primitive{Name: "bool"}
 	case *ast.CompositeLiteral:
 		e := expr.(*ast.CompositeLiteral)
-		r := e.Typ.(*ast.StructType)
 
 		err := a.analyzeType(e.Typ)
 		if err != nil {
 			a.analysisError(e.LeftBraceToken, "Invalid type in composite literal. "+err.Error())
 		}
+
+		r := e.Typ.(*ast.StructType)
 
 		if e.NamedInitializers == nil && e.UnnamedInitializers == nil {
 			a.analysisError(
@@ -722,7 +723,9 @@ func (a *Analyzer) analyzeStatement(statement ast.Statement) {
 			)
 		}
 
-		a.Module.Exports[s.Identifier.Lexeme] = &signature
+		if s.Exported {
+			a.Module.Exports[s.Identifier.Lexeme] = &signature
+		}
 	case *ast.StructDeclaration:
 		s := statement.(*ast.StructDeclaration)
 
@@ -747,7 +750,9 @@ func (a *Analyzer) analyzeStatement(statement ast.Statement) {
 			a.analysisError(s.Identifier, fmt.Sprintf("Type name '%s' is already in use.", s.Identifier.Lexeme))
 		}
 
-		a.Module.Exports[s.Identifier.Lexeme] = &st
+		if s.Exported {
+			a.Module.Exports[s.Identifier.Lexeme] = &st
+		}
 	case *ast.VariableDeclaration:
 		s := statement.(*ast.VariableDeclaration)
 
