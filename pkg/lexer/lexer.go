@@ -263,7 +263,7 @@ func (l *Lexer) ScanToken() {
 }
 
 func Lex(m *ast.Module) {
-	l := Lexer{Module: m}
+	l := Lexer{Module: m, line: 1}
 
 	for !l.isAtEnd() {
 		// we are at the beginning of the next lexeme.
