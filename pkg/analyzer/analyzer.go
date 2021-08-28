@@ -712,7 +712,10 @@ func (a *Analyzer) analyzeStatement(statement ast.Statement) {
 
 		err := a.analyzeType(s.ReturnType)
 		if err != nil {
-			a.analysisError(s.Identifier, "Invalid parameter type. "+err.Error())
+			a.analysisError(s.Identifier, "Invalid return type. "+err.Error())
+		}
+		if _, ok := s.ReturnType.(*ast.PointerType); ok {
+			a.analysisError(s.Identifier, "Cannot return pointer type.\n  help: consider returning a box type instead")
 		}
 
 		signature := ast.FunctionType{
