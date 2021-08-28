@@ -3,7 +3,6 @@ package parser
 import (
 	"fmt"
 	"log"
-	"path/filepath"
 
 	"github.com/kartiknair/myc/pkg/ast"
 	"github.com/kartiknair/myc/pkg/token"
@@ -240,12 +239,6 @@ func (p *Parser) parseStatement() ast.Statement {
 		p.current++
 		pathToken := p.expect(token.STRING, "Expect path to import from.")
 
-		absPath, err := filepath.Abs(pathToken.Lexeme)
-		if err != nil {
-			panic(err.Error())
-		}
-		pathToken.Lexeme = absPath
-
 		var alias *token.Token
 		if p.peek(0).Type == token.SEMICOLON {
 			alias = nil
@@ -372,8 +365,7 @@ func (p *Parser) parsePrecedenceExpression(lhs ast.Expression, minPrecedence int
 	return lhs
 }
 
-func (p *Parser) parseComposite() *ast.CompositeLiteral {
-	typ := p.parseType()
+func (p *Parser) parseComposite(typ ast.Type) *ast.CompositeLiteral {
 	leftBraceToken := p.expect(token.LEFT_BRACE, "Expect `{` after type in composite literal.")
 
 	if p.peek(0).Type == token.RIGHT_BRACE {
@@ -506,7 +498,8 @@ func (p *Parser) parsePrimary(expectingBlock bool) ast.Expression {
 			//
 			// The Go specification mentions this in https://golang.org/ref/spec#Composite_literals
 			p.current--
-			expr = p.parseComposite()
+			typ := p.parseType()
+			expr = p.parseComposite(typ)
 		} else {
 			expr = &ast.VariableExpression{
 				Identifier: p.peek(-1),
@@ -576,9 +569,18 @@ func (p *Parser) parsePrimary(expectingBlock bool) ast.Expression {
 		if p.peek(0).Type == token.DOT {
 			p.current++
 			ident := p.expect(token.IDENTIFIER, "Expect identifier after `.` in get expression.")
-			expr = &ast.GetExpression{
-				Expression: expr,
-				Identifier: ident,
+
+			if p.peek(0).Type == token.LEFT_BRACE {
+				// We've actually got a `module.StructType{}` composite literal
+				expr = p.parseComposite(&ast.StructType{
+					Name:         ident.Lexeme,
+					SourceModule: &ast.Module{Name: expr.(*ast.VariableExpression).Identifier.Lexeme},
+				})
+			} else {
+				expr = &ast.GetExpression{
+					Expression: expr,
+					Identifier: ident,
+				}
 			}
 		}
 
@@ -622,16 +624,28 @@ func (p *Parser) parseType() ast.Type {
 	var typ ast.Type
 
 	if p.peek(0).Type == token.IDENTIFIER {
+		ident := p.peek(0)
 		p.current++
 
 		if isIdentifierPrimitive(p.peek(-1)) {
 			typ = &ast.Primitive{
-				Name: p.peek(-1).Lexeme,
+				Name: ident.Lexeme,
 			}
 		} else {
-			typ = &ast.StructType{
-				Name: p.peek(-1).Lexeme,
-				// Members are resolved in analysis
+			if p.peek(0).Type == token.DOT {
+				p.current++
+				typeToken := p.expect(token.IDENTIFIER, "Expect name for imported type.")
+				typ = &ast.StructType{
+					Name: typeToken.Lexeme,
+					SourceModule: &ast.Module{
+						Name: ident.Lexeme,
+					},
+				}
+			} else {
+				typ = &ast.StructType{
+					Name: ident.Lexeme,
+					// Members are resolved in analysis
+				}
 			}
 		}
 	} else if p.peek(0).Type == token.STAR {

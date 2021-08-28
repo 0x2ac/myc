@@ -210,17 +210,33 @@ func (a *Analyzer) analyzeType(t ast.Type) error {
 	} else if ptrType, ok := t.(*ast.PointerType); ok {
 		return a.analyzeType(ptrType.ElType)
 	} else if structType, ok := t.(*ast.StructType); ok {
-		resolved, err := a.typespace.Get(structType.Name)
-		if err != nil {
-			return err
-		}
+		if structType.SourceModule != nil {
+			resolvedModuleType, err := a.namespace.Get(structType.SourceModule.Name)
 
-		*structType = *resolved.(*ast.StructType)
-		for _, m := range structType.Members {
-			e := a.analyzeType(m.Type)
-			if e != nil {
-				return e
+			if err != nil {
+				return err
+			} else if _, ok := resolvedModuleType.(*ast.Module); !ok {
+				return errors.New(fmt.Sprintf("%s is not a module.", resolvedModuleType.String()))
 			}
+
+			structType.SourceModule = resolvedModuleType.(*ast.Module)
+
+			resolvedType, ok := structType.SourceModule.Exports[structType.Name]
+			if !ok {
+				return errors.New(fmt.Sprintf(
+					"Type: '%s' is not exported from module: '%s'.",
+					structType.Name, structType.SourceModule.Name,
+				))
+			}
+
+			structType.Members = resolvedType.(*ast.StructType).Members
+		} else {
+			resolved, err := a.typespace.Get(structType.Name)
+			if err != nil {
+				return err
+			}
+
+			*structType = *resolved.(*ast.StructType)
 		}
 	}
 
@@ -581,8 +597,6 @@ func (a *Analyzer) analyzeExpression(expr ast.Expression) {
 				}
 			}
 		}
-
-		e.Typ = r
 	case *ast.SliceLiteral:
 		e := expr.(*ast.SliceLiteral)
 
@@ -659,6 +673,21 @@ var (
 	// Track whether we are within a function or not
 	isTopLevel = true
 )
+
+func (a *Analyzer) typeIsPrivate(t ast.Type) bool {
+	if structType, ok := t.(*ast.StructType); ok {
+		// TODO
+		fmt.Println(structType)
+	} else if sliceType, ok := t.(*ast.SliceType); ok {
+		return a.typeIsPrivate(sliceType.ElType)
+	} else if ptrType, ok := t.(*ast.PointerType); ok {
+		return a.typeIsPrivate(ptrType.ElType)
+	} else if boxType, ok := t.(*ast.BoxType); ok {
+		return a.typeIsPrivate(boxType.ElType)
+	}
+
+	return true
+}
 
 func (a *Analyzer) analyzeStatement(statement ast.Statement) {
 	switch statement.(type) {
@@ -741,8 +770,9 @@ func (a *Analyzer) analyzeStatement(statement ast.Statement) {
 		}
 
 		st := ast.StructType{
-			Name:    s.Identifier.Lexeme,
-			Members: s.Members,
+			Name:         s.Identifier.Lexeme,
+			Members:      s.Members,
+			SourceModule: a.Module,
 		}
 
 		err := a.typespace.Declare(s.Identifier.Lexeme, &st)
@@ -921,12 +951,13 @@ func (a *Analyzer) analyzeStatement(statement ast.Statement) {
 			s.Identifier = &token.Token{Lexeme: filename}
 		}
 
-		module, err := resolveModuleFromPath(s.PathToken.Lexeme)
+		module, err := resolveModuleFromPath(s.Identifier.Lexeme, a.Module, s.PathToken.Lexeme)
 		if err != nil {
 			a.analysisError(s.PathToken, "Failed while importing module. "+err.Error())
 		}
 
 		a.namespace.Declare(s.Identifier.Lexeme, module)
+		a.Module.Imports[s.Identifier.Lexeme] = module
 	case *ast.BlockStatement:
 		oldScope := a.namespace // copy the old scope
 		a.namespace = NewSymbolTableFromEnclosing(a.namespace)
@@ -940,15 +971,18 @@ func (a *Analyzer) analyzeStatement(statement ast.Statement) {
 	}
 }
 
-func resolveModuleFromPath(path string) (*ast.Module, error) {
-	contents, err := ioutil.ReadFile(path)
+func resolveModuleFromPath(alias string, currentModule *ast.Module, path string) (*ast.Module, error) {
+	resolvedPath := filepath.Join(filepath.Dir(currentModule.Path), path)
+	contents, err := ioutil.ReadFile(resolvedPath)
 	if err != nil {
 		return nil, err
 	}
 
 	m := ast.Module{
-		Path:    path,
+		Name:    alias,
+		Path:    resolvedPath,
 		Source:  string(contents),
+		Imports: make(map[string]*ast.Module),
 		Exports: make(map[string]ast.Type),
 	}
 

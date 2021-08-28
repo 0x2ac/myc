@@ -1,5 +1,15 @@
-import "./math"
+import "./math.myc"
+import "./point.myc"
 
 fun main() {
     print math.add(45, 67)
+
+    var p1 = point.Point{x: 24.32, y: 56.43}
+    var p2 = point.Point{x: 12.14, y: 45.65}
+    
+    print "p1 is: ", p1
+    print "p2 is: ", p2
+
+    var p3 = math.sum(p1, p2)
+    print "p3 is: ", p3
 }

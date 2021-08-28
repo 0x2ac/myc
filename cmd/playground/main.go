@@ -15,51 +15,43 @@ import (
 
 func main() {
 	code := `
-fun sum(a int, b int) int {
-	return a + b
-}
+import "./examples/modules/math.myc"
 
-fun fib(n int) int {
-	if n < 2 {
-		return n
-	}
-
-	return fib(n-1) + fib(n-2)
-}
-
-fun retEarly() {
-	var i = 0
-	while true {
-		if i == 10 {
-			return
-		}
-
-		print i
-		i = i + 1
-	}
-}
+// fun incPoint(p math.Point) math.Point {
+// 	return math.Point{
+// 		x: p.x+1.0,
+// 		y: p.y+1.0,
+// 	}
+// }
 
 fun main() {
-	print fib(20)
-	retEarly()
-}`
+	var p1 = math.Point{x: 34.0, y: 56.0}
+	print p1
+	// var p2 = incPoint(p1)
+	// print p2
+}
+`
 	cwd, err := os.Getwd()
 	if err != nil {
 		log.Fatal(err.Error())
 	}
 
 	m := ast.Module{
+		Name:    "",
 		Path:    filepath.Join(cwd, "main.myc"),
 		Source:  code,
+		Imports: make(map[string]*ast.Module),
 		Exports: make(map[string]ast.Type),
 	}
 
 	lexer.Lex(&m)
 	parser.Parse(&m)
+	// repr.Println(m.Statements)
 	analyzer.Analyze(&m)
 
 	// gennedC := gen.C(parsed)
 	// fmt.Println(gennedC)
 	gennedLLVM := gen.LLVM(&m)
 	fmt.Println(gennedLLVM)
+	// fmt.Println(llvmgen.GenRuntime())
 }

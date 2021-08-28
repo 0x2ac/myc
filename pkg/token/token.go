@@ -69,6 +69,10 @@ func (t TokenType) IsBinaryOperator() bool {
 	return t > binaryop_begin && t < binaryop_end
 }
 
+func (t TokenType) IsComparativeOperator() bool {
+	return t >= LESSER && t <= OR_OR
+}
+
 type Token struct {
 	Lexeme string
 	Type   TokenType

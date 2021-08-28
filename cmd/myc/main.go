@@ -24,87 +24,229 @@ var CLANG_EXECUTABLE_PATH = "clang"
 
 const DEBUG_MESSAGES = true
 
-func genIRFromFile(filename string) string {
-	code, err := ioutil.ReadFile(filename)
+func CreatePreludeObject(dir string) string {
+	prelude := `
+		#include <stdio.h>
+		#include <stdlib.h>
+
+		int printf(const char*, ...);
+		int putchar(int);
+		void* malloc(size_t);
+		void free(void*);
+		void exit(int);
+	`
+
+	objPath := filepath.Join(dir, "prelude.o")
+	compileCommand := exec.Command(
+		CLANG_EXECUTABLE_PATH,
+		"-c",
+		"-o",
+		objPath,
+		"-x",
+		"c",
+		"-",
+	)
+	compileCommand.Stdin = strings.NewReader(prelude)
+
+	if DEBUG_MESSAGES {
+		fmt.Println("Compiling prelude object...")
+		fmt.Println(compileCommand)
+		compileCommand.Stdout = os.Stdout
+		compileCommand.Stderr = os.Stderr
+	}
+
+	err := compileCommand.Run()
 	if err != nil {
-		log.Fatalf("Failed while attempting to read source file.\n%s", err.Error())
+		log.Fatalf("Failed to compile prelude object.\n%s", err.Error())
 	}
 
-	start := time.Now()
-
-	m := ast.Module{
-		Path:    filename,
-		Source:  string(code),
-		Exports: make(map[string]ast.Type),
-	}
-
-	lexer.Lex(&m)
-	parser.Parse(&m)
-	analyzer.Analyze(&m)
-
-	lpaTime := time.Now()
-
-	if DEBUG_MESSAGES {
-		fmt.Printf("time: %dus for lexing and parsing and analysis\n", lpaTime.Sub(start).Microseconds())
-	}
-
-	ir := llvmgen.Gen(&m)
-
-	if DEBUG_MESSAGES {
-		irGenTime := time.Now()
-		fmt.Printf("time: %dus to generate LLVM IR\n", irGenTime.Sub(lpaTime).Microseconds())
-	}
-
-	return ir
+	return objPath
 }
 
-func compileIRToExecutable(ir string) string {
-	if cc := os.Getenv("MYC_CC"); cc != "" {
-		CLANG_EXECUTABLE_PATH = cc
+func CreateRuntimeObject(dir string) string {
+	runtimeCode := llvmgen.GenRuntime()
+
+	objPath := filepath.Join(dir, "runtime.o")
+	compileCommand := exec.Command(
+		CLANG_EXECUTABLE_PATH,
+		"-c",
+		"-o",
+		objPath,
+		"-x",
+		"ir",
+		"-",
+	)
+	compileCommand.Stdin = strings.NewReader(runtimeCode)
+
+	if DEBUG_MESSAGES {
+		fmt.Println("Compiling runtime object...")
+		fmt.Println(compileCommand)
+		compileCommand.Stdout = os.Stdout
+		compileCommand.Stderr = os.Stderr
 	}
 
-	tmpDir, err := ioutil.TempDir("", "myc-tmp--*")
+	err := compileCommand.Run()
 	if err != nil {
-		log.Fatalf("Failed while creating temp directory.\n%s", err.Error())
+		log.Fatalf("Failed to compile runtime object.\n%s", err.Error())
 	}
 
-	mycExeFilePath := filepath.Join(tmpDir, "myc-exe.out")
+	return objPath
+
+}
+
+func CreateModuleFromPath(filename string) *ast.Module {
+	start := time.Now()
+
+	bytes, err := ioutil.ReadFile(filename)
+	if err != nil {
+		log.Fatalf("Failed while reading source file.\n%s", err.Error())
+	}
+
+	readFileTime := time.Now()
+	if DEBUG_MESSAGES {
+		fmt.Printf("%s: time: %dus to read source file\n", filepath.Base(filename), readFileTime.Sub(start).Microseconds())
+	}
+
+	absPath, err := filepath.Abs(filename)
+	if err != nil {
+		log.Fatalf("Failed while getting source file's absolute path.\n%s", err.Error())
+	}
+
+	module := &ast.Module{
+		Name:    "",
+		Path:    absPath,
+		Source:  string(bytes),
+		Imports: make(map[string]*ast.Module),
+	}
+
+	lexer.Lex(module)
+	parser.Parse(module)
+	analyzer.Analyze(module)
+
+	lpaTime := time.Now()
+	if DEBUG_MESSAGES {
+		fmt.Printf("%s: time: %dus to lex, parse, and analze\n", filepath.Base(module.Path), lpaTime.Sub(readFileTime).Microseconds())
+	}
+
+	return module
+}
+
+// Compiles the provided module to an object file and returns the path of the output object file
+func CompileModule(dir string, module *ast.Module) string {
+	start := time.Now()
+
+	ir := llvmgen.Gen(module)
+	irGenTime := time.Now()
+
+	if DEBUG_MESSAGES {
+		fmt.Printf("%s: time: %dus to generate LLVM IR\n", filepath.Base(module.Path), irGenTime.Sub(start).Microseconds())
+	}
+
+	objFilePath := filepath.Join(dir, fmt.Sprintf("myc-%s.o", module.Name))
 
 	compileCommand := exec.Command(
 		CLANG_EXECUTABLE_PATH,
 		"-x",
 		"ir",
+		"-c",
 		"-o",
-		mycExeFilePath,
+		objFilePath,
 		"-",
 	)
 
-	fmt.Println(compileCommand)
 	if DEBUG_MESSAGES {
+		fmt.Println(compileCommand)
 		compileCommand.Stdout = os.Stdout
 		compileCommand.Stderr = os.Stderr
 	}
 	compileCommand.Stdin = strings.NewReader(ir)
 
-	start := time.Now()
-
-	err = compileCommand.Run()
+	err := compileCommand.Run()
+	clangTime := time.Now()
 
 	if err != nil {
-		log.Fatalf("Failed while compiling LLVM IR to object. %s", err.Error())
+		log.Fatalf("Failed while compiling LLVM IR to object.\n%s", err.Error())
 	}
 
 	if DEBUG_MESSAGES {
-		fmt.Printf("time: %dms for clang to compile and link.\n", time.Since(start).Milliseconds())
+		fmt.Printf("%s: time: %dms for clang to compile LLVM IR to object.\n", filepath.Base(module.Path), clangTime.Sub(irGenTime).Milliseconds())
 	}
 
-	return mycExeFilePath
+	return objFilePath
+}
+
+func addModuleToListRecursively(module *ast.Module, moduleList *[]*ast.Module) {
+	inList := false
+	for i, m := range *moduleList {
+		if m.Path == module.Path {
+			inList = true
+			module.Name = fmt.Sprintf("_%d", i)
+		}
+	}
+
+	if !inList {
+		module.Name = fmt.Sprintf("_%d", len(*moduleList))
+		*moduleList = append(*moduleList, module)
+	}
+
+	for _, imp := range module.Imports {
+		addModuleToListRecursively(imp, moduleList)
+	}
+}
+
+func flattenAndMangleModuleDependencies(module *ast.Module) []*ast.Module {
+	var moduleList []*ast.Module
+
+	for _, dep := range module.Imports {
+		addModuleToListRecursively(dep, &moduleList)
+	}
+
+	return moduleList
+}
+
+func CompileAndLinkModule(module *ast.Module) string {
+	tmpDir, err := ioutil.TempDir("", "myc-tmp--*")
+	if err != nil {
+		log.Fatalf("Failed while creating temp directory.\n%s", err.Error())
+	}
+
+	module.Name = "main"
+	deps := flattenAndMangleModuleDependencies(module)
+
+	exePath := filepath.Join(tmpDir, "myc-exe-.out")
+	mainObjPath := CompileModule(tmpDir, module)
+	preludeObjPath := CreatePreludeObject(tmpDir)
+	runtimeObjPath := CreateRuntimeObject(tmpDir)
+
+	objs := []string{mainObjPath}
+	for _, dep := range deps {
+		objs = append(objs, CompileModule(tmpDir, dep))
+	}
+
+	args := []string{"-o", exePath, preludeObjPath, runtimeObjPath}
+	args = append(args, objs...)
+
+	linkCommand := exec.Command(
+		CLANG_EXECUTABLE_PATH,
+		args...,
+	)
+
+	if DEBUG_MESSAGES {
+		fmt.Println(linkCommand)
+		linkCommand.Stdout = os.Stdout
+		linkCommand.Stderr = os.Stderr
+	}
+
+	err = linkCommand.Run()
+	if err != nil {
+		log.Fatalf("Failed while linking objects to executable.\n%s", err.Error())
+	}
+
+	return exePath
 }
 
 func run(filename string) {
-	ir := genIRFromFile(filename)
-
-	exePath := compileIRToExecutable(ir)
+	exePath := CompileAndLinkModule(CreateModuleFromPath(filename))
 
 	runCmd := exec.Command(exePath, os.Args...)
 	runCmd.Stdout = os.Stdout
@@ -137,13 +279,16 @@ func copyFile(srcPath string, dstPath string) error {
 }
 
 func build(filename string, executableName string) {
-	ir := genIRFromFile(filename)
-	exePath := compileIRToExecutable(ir)
+	exePath := CompileAndLinkModule(CreateModuleFromPath(filename))
 	copyFile(exePath, executableName)
 }
 
 func main() {
 	var executableOutputFile string
+
+	if cc := os.Getenv("MYC_CC"); cc != "" {
+		CLANG_EXECUTABLE_PATH = cc
+	}
 
 	app := &cli.App{
 		Name:  "myc",

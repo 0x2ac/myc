@@ -25,8 +25,9 @@ type FunctionType struct {
 }
 
 type StructType struct {
-	Name    string
-	Members []StructMember
+	Name         string
+	Members      []StructMember
+	SourceModule *Module
 }
 
 type PointerType struct {
@@ -46,11 +47,17 @@ type SumType struct {
 }
 
 type Module struct {
+	// The alias for this module's namespace. An empty string
+	// represents the main module and leads to no namespacing.
+	Name string
+
 	Path       string
 	Source     string
 	Tokens     []token.Token
 	Statements []Statement
-	Exports    map[string]Type
+
+	Imports map[string]*Module
+	Exports map[string]Type
 }
 
 func (*Primitive) isType()    {}

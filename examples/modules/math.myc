@@ -1,3 +1,12 @@
+import "./point.myc" pnt
+
 export fun add(x int, y int) int {
     return x + y
+}
+
+export fun sum(p1 pnt.Point, p2 pnt.Point) pnt.Point {
+    return pnt.Point{
+        x: p1.x + p2.x,
+        y: p1.y + p2.y,
+    }
 }
