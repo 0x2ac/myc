@@ -113,7 +113,11 @@ func isAssignable(valueType ast.Type, targetType ast.Type, valueIsLvalue bool, o
 		panic("Invalid call to `isAssignable`")
 	}
 
-	if !valueType.Equals(targetType) {
+	if targetType == nil {
+		panic("Invalid call to `isAssignable`, target-type must not be `nil`.")
+	} else if valueType == nil && targetType != nil {
+		return errors.New(fmt.Sprintf("Void expression cannot be used for type: '%s'.", targetType.String()))
+	} else if !valueType.Equals(targetType) {
 		targetSumT, targetIsSumType := targetType.(*ast.SumType)
 		valueSumT, valueIsSumType := valueType.(*ast.SumType)
 
@@ -806,10 +810,9 @@ func (a *Analyzer) analyzeStatement(statement ast.Statement) {
 				a.analysisError(s.Identifier, "Cannot infer type of 0 element slice literal.")
 			}
 
-			// // e.g. var foo = nil
-			// if l, ok := s.Value.(*ast.Literal); ok && l.LiteralType == token.NIL {
-			// 	a.analysisError(s.Identifier, "Cannot infer type of variable initialized with `nil`.")
-			// }
+			if s.Value.Type() == nil {
+				a.analysisError(s.Value.ErrorToken(), "Cannot create variable from void expression.")
+			}
 
 			// e.g. var foo = 42
 			s.Type = s.Value.Type()
@@ -897,6 +900,9 @@ func (a *Analyzer) analyzeStatement(statement ast.Statement) {
 
 		for _, expr := range s.Expressions {
 			a.analyzeExpression(expr)
+			if expr.Type() == nil {
+				a.analysisError(expr.ErrorToken(), "Cannot print void expression")
+			}
 		}
 	case *ast.ReturnStatement:
 		s := statement.(*ast.ReturnStatement)
