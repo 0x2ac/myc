@@ -681,20 +681,36 @@ var (
 )
 
 func (a *Analyzer) typeIsPrivate(t ast.Type) bool {
-	panic("TODO")
+	switch t := t.(type) {
+	case *ast.StructType:
+		exported := false
+		for name := range t.SourceModule.Exports {
+			if t.Name == name {
+				exported = true
+			}
+		}
 
-	if structType, ok := t.(*ast.StructType); ok {
-		// TODO
-		fmt.Println(structType)
-	} else if sliceType, ok := t.(*ast.SliceType); ok {
-		return a.typeIsPrivate(sliceType.ElType)
-	} else if ptrType, ok := t.(*ast.PointerType); ok {
-		return a.typeIsPrivate(ptrType.ElType)
-	} else if boxType, ok := t.(*ast.BoxType); ok {
-		return a.typeIsPrivate(boxType.ElType)
+		return !exported
+	case *ast.SliceType:
+		return a.typeIsPrivate(t.ElType)
+	case *ast.BoxType:
+		return a.typeIsPrivate(t.ElType)
+	case *ast.PointerType:
+		return a.typeIsPrivate(t.ElType)
+	case *ast.Primitive:
+		return false
+	case *ast.SumType:
+		anyTypePrivate := false
+		for _, variant := range t.Options {
+			if a.typeIsPrivate(variant) {
+				anyTypePrivate = true
+			}
+		}
+
+		return anyTypePrivate
 	}
 
-	return true
+	panic("`typeIsPrivate` not yet implemented for that type yet")
 }
 
 func (a *Analyzer) analyzeStatement(statement ast.Statement) {
@@ -716,11 +732,17 @@ func (a *Analyzer) analyzeStatement(statement ast.Statement) {
 			if err != nil {
 				a.analysisError(p.Identifier, "Invalid parameter type. "+err.Error())
 			}
+			if s.Exported && a.typeIsPrivate(p.Type) {
+				a.analysisError(p.Identifier, "Private type used in public interface.")
+			}
 		}
 
 		err := a.analyzeType(s.ReturnType)
 		if err != nil {
 			a.analysisError(s.Identifier, "Invalid return type. "+err.Error())
+		}
+		if s.Exported && a.typeIsPrivate(s.ReturnType) {
+			a.analysisError(s.Identifier, "Private type used in public interface.")
 		}
 		if _, ok := s.ReturnType.(*ast.PointerType); ok {
 			a.analysisError(s.Identifier, "Cannot return pointer type.\n  help: consider returning a box type instead")
@@ -777,6 +799,10 @@ func (a *Analyzer) analyzeStatement(statement ast.Statement) {
 			err := a.analyzeType(m.Type)
 			if err != nil {
 				a.analysisError(m.Identifier, "Invalid type for struct member. "+err.Error())
+			}
+
+			if s.Exported && a.typeIsPrivate(m.Type) {
+				a.analysisError(m.Identifier, "Private type used in public interface.")
 			}
 
 			if _, ok := m.Type.(*ast.PointerType); ok {
