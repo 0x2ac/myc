@@ -102,7 +102,7 @@ func genType(t ast.Type) types.Type {
 		return typ
 	case *ast.StructType:
 		s := t.(*ast.StructType)
-		if s.SourceModule != nil {
+		if s.SourceModule.Name != "main" {
 			typ, ok := typespace[s.SourceModule.Name+"."+s.Name]
 			if !ok {
 				panic("Internal error. Could not resolve imported type.")
@@ -163,7 +163,7 @@ func getTypeName(t ast.Type) string {
 	if p, ok := t.(*ast.Primitive); ok {
 		return p.Name
 	} else if s, ok := t.(*ast.StructType); ok {
-		if s.SourceModule != nil && s.SourceModule.Name != "" {
+		if s.SourceModule.Name != "main" {
 			return s.SourceModule.Name + "." + s.Name
 		}
 		return s.Name
@@ -392,7 +392,12 @@ func genStatement(stmt ast.Statement, currentModule *ast.Module) {
 		}
 
 		var fun *ir.Func
-		if s.Exported && currentModule.Name != "" {
+		if s.External {
+			fun = genFunDecl(s.Identifier.Lexeme, &funType)
+			fun.Linkage = enum.LinkageExternal
+			namespace[s.Identifier.Lexeme] = fun
+			return
+		} else if s.Exported && currentModule.Name != "" {
 			fun = genFunDecl(currentModule.Name+"."+s.Identifier.Lexeme, &funType)
 		} else {
 			fun = genFunDecl(s.Identifier.Lexeme, &funType)

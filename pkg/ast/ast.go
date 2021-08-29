@@ -19,6 +19,7 @@ type Primitive struct {
 }
 
 type FunctionType struct {
+	External   bool
 	Name       string
 	Parameters []Type
 	ReturnType Type
@@ -326,11 +327,12 @@ type Parameter struct {
 }
 
 type FunctionDeclaration struct {
+	External   bool
 	Exported   bool
 	Identifier token.Token
 	Parameters []Parameter
 	ReturnType Type
-	Block      BlockStatement
+	Block      *BlockStatement
 }
 
 type StructDeclaration struct {

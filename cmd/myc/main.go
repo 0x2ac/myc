@@ -204,7 +204,7 @@ func flattenAndMangleModuleDependencies(module *ast.Module) []*ast.Module {
 	return moduleList
 }
 
-func CompileAndLinkModule(module *ast.Module) string {
+func CompileAndLinkModule(module *ast.Module, linkerFlags string) string {
 	tmpDir, err := ioutil.TempDir("", "myc-tmp--*")
 	if err != nil {
 		log.Fatalf("Failed while creating temp directory.\n%s", err.Error())
@@ -224,6 +224,7 @@ func CompileAndLinkModule(module *ast.Module) string {
 	}
 
 	args := []string{"-o", exePath, preludeObjPath, runtimeObjPath}
+	args = append(args, linkerFlags)
 	args = append(args, objs...)
 
 	linkCommand := exec.Command(
@@ -245,8 +246,8 @@ func CompileAndLinkModule(module *ast.Module) string {
 	return exePath
 }
 
-func run(filename string) {
-	exePath := CompileAndLinkModule(CreateModuleFromPath(filename))
+func run(filename string, linkerFlags string) {
+	exePath := CompileAndLinkModule(CreateModuleFromPath(filename), linkerFlags)
 
 	runCmd := exec.Command(exePath, os.Args...)
 	runCmd.Stdout = os.Stdout
@@ -278,13 +279,14 @@ func copyFile(srcPath string, dstPath string) error {
 	return out.Close()
 }
 
-func build(filename string, executableName string) {
-	exePath := CompileAndLinkModule(CreateModuleFromPath(filename))
+func build(filename string, executableName string, linkerFlags string) {
+	exePath := CompileAndLinkModule(CreateModuleFromPath(filename), linkerFlags)
 	copyFile(exePath, executableName)
 }
 
 func main() {
 	var executableOutputFile string
+	var linkerFlags string
 
 	if cc := os.Getenv("MYC_CC"); cc != "" {
 		CLANG_EXECUTABLE_PATH = cc
@@ -293,6 +295,14 @@ func main() {
 	app := &cli.App{
 		Name:  "myc",
 		Usage: "A simple programming language (WIP).",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:        "linker-flags",
+				Value:       "",
+				Usage:       "Pass flags directly to the linker (helpful to link external dependencies)",
+				Destination: &linkerFlags,
+			},
+		},
 		Commands: []*cli.Command{
 			{
 				Name:  "run",
@@ -306,7 +316,7 @@ func main() {
 						return errors.New("Source file not provided.")
 					}
 					fmt.Println("Compiling:")
-					run(filename)
+					run(filename, linkerFlags)
 					return nil
 				},
 			},
@@ -338,7 +348,7 @@ If you've provided flags make sure they go before the arguments.
 					if filename == "" {
 						return errors.New("Source file not provided.")
 					}
-					build(filename, executableOutputFile)
+					build(filename, executableOutputFile, linkerFlags)
 					return nil
 				},
 			},

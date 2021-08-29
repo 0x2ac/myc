@@ -59,7 +59,20 @@ func (p *Parser) expect(typ token.TokenType, message string) token.Token {
 func (p *Parser) parseStatement() ast.Statement {
 	t := p.peek(0)
 
-	if t.Type == token.FUN {
+	if t.Type == token.EXTERN {
+		p.current++
+		decl := p.parseStatement()
+		if funcDecl, ok := decl.(*ast.FunctionDeclaration); ok {
+			funcDecl.External = true
+			if funcDecl.Block != nil {
+				p.parseError(t, "External function cannot have body.")
+			}
+
+			return funcDecl
+		} else {
+			p.parseError(t, "Only function declaration can be external.")
+		}
+	} else if t.Type == token.FUN {
 		// FunctionDeclaration
 		p.current++
 		name := p.expect(token.IDENTIFIER, "Expect function name.")
@@ -86,19 +99,22 @@ func (p *Parser) parseStatement() ast.Statement {
 
 		var returnType ast.Type
 
-		if p.peek(0).Type != token.LEFT_BRACE {
+		if p.peek(0).Type != token.LEFT_BRACE && p.peek(0).Type != token.SEMICOLON {
 			returnType = p.parseType()
 		}
 
-		p.expect(token.LEFT_BRACE, "Expect block after function signature.")
-		p.current-- // since expect consumes the `{`
-		block := p.parseBlock()
+		var block *ast.BlockStatement
+		if p.peek(0).Type == token.LEFT_BRACE {
+			block = p.parseBlock()
+		} else {
+			p.expect(token.SEMICOLON, "Expect ';' in block-less function declaration.")
+		}
 
 		return &ast.FunctionDeclaration{
 			Identifier: name,
 			Parameters: parameters,
 			ReturnType: returnType,
-			Block:      *block,
+			Block:      block,
 		}
 	} else if t.Type == token.STRUCT {
 		// StructDeclaration

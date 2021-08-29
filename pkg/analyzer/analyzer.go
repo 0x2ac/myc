@@ -85,6 +85,8 @@ func Analyze(m *ast.Module) {
 					a.analysisError(f.Identifier, "Top level main function must not return anything.")
 				} else if len(f.Parameters) != 0 {
 					a.analysisError(f.Identifier, "Top level main function cannot take any parameters.")
+				} else if f.Exported {
+					a.analysisError(f.Identifier, "Top level main function must be private.")
 				}
 			}
 		}
@@ -679,6 +681,8 @@ var (
 )
 
 func (a *Analyzer) typeIsPrivate(t ast.Type) bool {
+	panic("TODO")
+
 	if structType, ok := t.(*ast.StructType); ok {
 		// TODO
 		fmt.Println(structType)
@@ -723,6 +727,7 @@ func (a *Analyzer) analyzeStatement(statement ast.Statement) {
 		}
 
 		signature := ast.FunctionType{
+			External:   s.External,
 			Name:       s.Identifier.Lexeme,
 			Parameters: onlyTypeParams,
 			ReturnType: s.ReturnType,
@@ -741,27 +746,30 @@ func (a *Analyzer) analyzeStatement(statement ast.Statement) {
 			a.namespace.Shadow(param.Identifier.Lexeme, param.Type)
 		}
 
-		for _, statement := range s.Block.Statements {
-			a.analyzeStatement(statement)
+		if !s.External {
+			for _, statement := range s.Block.Statements {
+				a.analyzeStatement(statement)
+			}
+
+			a.namespace = oldScope
+			functionScope = oldFunctionScope
+
+			if !hasValidReturn && s.ReturnType != nil {
+				a.analysisError(
+					s.Identifier,
+					fmt.Sprintf(
+						"Function does not have a return statement. Expected return of type: `%s`.",
+						s.ReturnType,
+					),
+				)
+			}
+
+			if s.Exported {
+				a.Module.Exports[s.Identifier.Lexeme] = &signature
+			}
 		}
 
-		a.namespace = oldScope
-		functionScope = oldFunctionScope
 		isTopLevel = true
-
-		if !hasValidReturn && s.ReturnType != nil {
-			a.analysisError(
-				s.Identifier,
-				fmt.Sprintf(
-					"Function does not have a return statement. Expected return of type: `%s`.",
-					s.ReturnType,
-				),
-			)
-		}
-
-		if s.Exported {
-			a.Module.Exports[s.Identifier.Lexeme] = &signature
-		}
 	case *ast.StructDeclaration:
 		s := statement.(*ast.StructDeclaration)
 

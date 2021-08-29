@@ -92,7 +92,7 @@ func genFunctionDeclaration(decl *ast.FunctionDeclaration) string {
 		ret,
 		decl.Identifier.Lexeme,
 		gennedParameters,
-		genBlockStatement(&decl.Block),
+		genBlockStatement(decl.Block),
 	)
 }
 

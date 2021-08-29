@@ -24,6 +24,7 @@ const (
 	IS
 	IMPORT
 	EXPORT
+	EXTERN
 	KEYWORD_END
 
 	LEFT_PAREN
@@ -99,4 +100,5 @@ var Keywords = [...]string{
 	"is",
 	"import",
 	"export",
+	"extern",
 }
