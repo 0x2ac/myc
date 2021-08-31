@@ -1,0 +1,40 @@
+struct Person {
+    name str
+    age  int
+}
+
+impl Person {
+    fun greet() {
+        print "Hello there, I'm", self^.name, "! I'm", self^.age, "years old."
+    }
+
+    fun canVote() bool {
+        return self^.age > 18
+    }
+}
+
+impl str {
+    fun prnt() {
+        print self^;
+    }
+}
+
+fun main() {
+    var p1 = Person{"John", 15}
+    var p2 = Person{"Jane", 26}
+
+    print p1
+    print p2
+
+    p1.greet()
+    if p1.canVote() {
+        print p1.name, "can vote!"
+    }
+
+    p2.greet()
+    if p2.canVote() {
+        print p2.name, "can vote!"
+    }
+
+    "woah".prnt()
+}

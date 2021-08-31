@@ -60,6 +60,7 @@ func (p *Parser) parseStatement() ast.Statement {
 	t := p.peek(0)
 
 	if t.Type == token.EXTERN {
+		// Extern FunctionDeclaration
 		p.current++
 		decl := p.parseStatement()
 		if funcDecl, ok := decl.(*ast.FunctionDeclaration); ok {
@@ -71,6 +72,36 @@ func (p *Parser) parseStatement() ast.Statement {
 			return funcDecl
 		} else {
 			p.parseError(t, "Only function declaration can be external.")
+		}
+	} else if t.Type == token.IMPL {
+		// ImplBlock
+		p.current++
+		typ := p.parseType()
+		p.expect(token.LEFT_BRACE, "Expect block after keyword `impl`.")
+
+		var methods []ast.FunctionDeclaration
+		for p.peek(0).Type != token.EOF && p.peek(0).Type != token.RIGHT_BRACE {
+			stmt := p.parseStatement()
+			if funcDecl, ok := stmt.(*ast.FunctionDeclaration); ok {
+				if funcDecl.External {
+					p.parseError(funcDecl.Identifier, "Cannot have `extern` functions within `impl` block.")
+				}
+				methods = append(methods, *funcDecl)
+			} else {
+				p.parseError(p.peek(0), "Can only have function declarations in `impl` block.")
+			}
+		}
+
+		p.expect(token.RIGHT_BRACE, "Unclosed `impl` block.")
+
+		if p.peek(0).Type == token.SEMICOLON {
+			p.current++
+		}
+
+		return &ast.ImplBlock{
+			Receiver:  typ,
+			Methods:   methods,
+			ImplToken: t,
 		}
 	} else if t.Type == token.FUN {
 		// FunctionDeclaration
@@ -645,7 +676,8 @@ func (p *Parser) parseType() ast.Type {
 
 		if isIdentifierPrimitive(p.peek(-1)) {
 			typ = &ast.Primitive{
-				Name: ident.Lexeme,
+				Name:        ident.Lexeme,
+				MethodTable: make(map[string]ast.FunctionType),
 			}
 		} else {
 			if p.peek(0).Type == token.DOT {

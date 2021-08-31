@@ -12,10 +12,12 @@ type Type interface {
 	Equals(Type) bool
 	String() string
 	IsCopyable() bool
+	Methods() *map[string]FunctionType
 }
 
 type Primitive struct {
-	Name string
+	Name        string
+	MethodTable map[string]FunctionType
 }
 
 type FunctionType struct {
@@ -29,6 +31,7 @@ type StructType struct {
 	Name         string
 	Members      []StructMember
 	SourceModule *Module
+	MethodTable  map[string]FunctionType
 }
 
 type PointerType struct {
@@ -86,6 +89,10 @@ func (p *Primitive) IsCopyable() bool {
 	return p.Name != "str"
 }
 
+func (p *Primitive) Methods() *map[string]FunctionType {
+	return &p.MethodTable
+}
+
 func (p *Primitive) IsNumeric() bool {
 	return p.Name == "int" || p.Name == "float"
 }
@@ -124,6 +131,10 @@ func (f *FunctionType) IsCopyable() bool {
 	// Not actually sure about this, but we could come back to it once function
 	// types are actually available to the user.
 	return true
+}
+
+func (f *FunctionType) Methods() *map[string]FunctionType {
+	panic("FunctionType cannot have methods")
 }
 
 func (s *StructType) Equals(t Type) bool {
@@ -168,6 +179,10 @@ func (s *StructType) IsCopyable() bool {
 	return true
 }
 
+func (s *StructType) Methods() *map[string]FunctionType {
+	return &s.MethodTable
+}
+
 func (p *PointerType) Equals(t Type) bool {
 	if ptrType, ok := t.(*PointerType); ok {
 		return p.ElType.Equals(ptrType.ElType)
@@ -182,6 +197,10 @@ func (p *PointerType) String() string {
 
 func (p *PointerType) IsCopyable() bool {
 	return true
+}
+
+func (p *PointerType) Methods() *map[string]FunctionType {
+	panic("PointerType cannot have methods")
 }
 
 func (b *BoxType) Equals(t Type) bool {
@@ -200,6 +219,10 @@ func (b *BoxType) IsCopyable() bool {
 	return false
 }
 
+func (b *BoxType) Methods() *map[string]FunctionType {
+	panic("BoxType cannot have methods")
+}
+
 func (s *SliceType) Equals(t Type) bool {
 	if sliceType, ok := t.(*SliceType); ok {
 		return s.ElType.Equals(sliceType.ElType)
@@ -214,6 +237,10 @@ func (s *SliceType) String() string {
 
 func (s *SliceType) IsCopyable() bool {
 	return false
+}
+
+func (s *SliceType) Methods() *map[string]FunctionType {
+	panic("SliceType cannot have methods")
 }
 
 func (s *SumType) Equals(t Type) bool {
@@ -249,6 +276,10 @@ func (s *SumType) IsCopyable() bool {
 	return false
 }
 
+func (s *SumType) Methods() *map[string]FunctionType {
+	panic("SumType cannot have methods")
+}
+
 func (m *Module) Equals(t Type) bool {
 	if modType, ok := t.(*Module); ok {
 		return m.Path == modType.Path
@@ -263,6 +294,10 @@ func (m *Module) String() string {
 
 func (m *Module) IsCopyable() bool {
 	return false
+}
+
+func (m *Module) Methods() *map[string]FunctionType {
+	panic("SumType cannot have methods")
 }
 
 func (m *Module) TokenSourceContext(t *token.Token) string {
@@ -335,6 +370,27 @@ type FunctionDeclaration struct {
 	Block      *BlockStatement
 }
 
+func (f *FunctionDeclaration) ToType() FunctionType {
+	var typeParams []Type
+	for _, p := range f.Parameters {
+		typeParams = append(typeParams, p.Type)
+	}
+
+	return FunctionType{
+		External:   f.External,
+		Name:       f.Identifier.Lexeme,
+		Parameters: typeParams,
+		ReturnType: f.ReturnType,
+	}
+}
+
+type ImplBlock struct {
+	Receiver Type
+	Methods  []FunctionDeclaration
+
+	ImplToken token.Token
+}
+
 type StructDeclaration struct {
 	Exported   bool
 	Identifier token.Token
@@ -402,6 +458,7 @@ type BlockStatement struct {
 
 func (*FunctionDeclaration) isStatement() {}
 func (*StructDeclaration) isStatement()   {}
+func (*ImplBlock) isStatement()           {}
 func (*VariableDeclaration) isStatement() {}
 func (*IfStatement) isStatement()         {}
 func (*WhileStatement) isStatement()      {}

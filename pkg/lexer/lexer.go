@@ -243,7 +243,11 @@ func (l *Lexer) ScanToken() {
 					currentTokensType == token.FALSE ||
 					currentTokensType == token.CARET ||
 					currentTokensType == token.STRING) {
-				l.addToken(token.SEMICOLON, "")
+				l.tokens = append(l.tokens, token.Token{
+					Lexeme: ";",
+					Type:   token.SEMICOLON,
+					Pos:    token.Pos{Line: l.line, Column: l.current - l.lineBegin - 1},
+				})
 			}
 		}
 

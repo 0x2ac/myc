@@ -25,6 +25,7 @@ const (
 	IMPORT
 	EXPORT
 	EXTERN
+	IMPL
 	KEYWORD_END
 
 	LEFT_PAREN
@@ -101,4 +102,5 @@ var Keywords = [...]string{
 	"import",
 	"export",
 	"extern",
+	"impl",
 }

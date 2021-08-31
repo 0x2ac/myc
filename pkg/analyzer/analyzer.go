@@ -75,6 +75,11 @@ func Analyze(m *ast.Module) {
 		typespace: NewSymbolTable(),
 	}
 
+	a.typespace.Declare("str", &ast.Primitive{Name: "str", MethodTable: make(map[string]ast.FunctionType)})
+	a.typespace.Declare("int", &ast.Primitive{Name: "int", MethodTable: make(map[string]ast.FunctionType)})
+	a.typespace.Declare("float", &ast.Primitive{Name: "float", MethodTable: make(map[string]ast.FunctionType)})
+	a.typespace.Declare("bool", &ast.Primitive{Name: "bool", MethodTable: make(map[string]ast.FunctionType)})
+
 	for _, statement := range m.Statements {
 		a.analyzeStatement(statement)
 
@@ -244,6 +249,9 @@ func (a *Analyzer) analyzeType(t ast.Type) error {
 
 			*structType = *resolved.(*ast.StructType)
 		}
+	} else if primitive, ok := t.(*ast.Primitive); ok {
+		typ, _ := a.typespace.Get(primitive.Name)
+		primitive = typ.(*ast.Primitive)
 	}
 
 	return nil
@@ -331,10 +339,10 @@ func (a *Analyzer) analyzeExpression(expr ast.Expression) {
 					))
 				}
 
-				e.Typ = &ast.Primitive{Name: "bool"}
+				e.Typ, _ = a.typespace.Get("bool")
 			} else if e.Operator.Type == token.EQUAL_EQUAL ||
 				e.Operator.Type == token.BANG_EQUAL {
-				e.Typ = &ast.Primitive{Name: "bool"}
+				e.Typ, _ = a.typespace.Get("bool")
 			} else if e.Operator.Type == token.AND_AND || e.Operator.Type == token.OR_OR {
 				// Logical operators only work on `bool` expressions
 				if prim.Name != "bool" {
@@ -344,7 +352,7 @@ func (a *Analyzer) analyzeExpression(expr ast.Expression) {
 					))
 				}
 
-				e.Typ = &ast.Primitive{Name: "bool"}
+				e.Typ, _ = a.typespace.Get("bool")
 			}
 		}
 	case *ast.CallExpression:
@@ -403,11 +411,12 @@ func (a *Analyzer) analyzeExpression(expr ast.Expression) {
 
 		a.analyzeExpression(e.Expression)
 
+		primType, isPrimitive := e.Expression.Type().(*ast.Primitive)
 		structType, isStruct := e.Expression.Type().(*ast.StructType)
 		moduleType, isModule := e.Expression.Type().(*ast.Module)
 
 		// e.g. 32.value, "hello".foo, etc.
-		if !isStruct && !isModule {
+		if !isStruct && !isModule && !isPrimitive {
 			a.analysisError(
 				e.Identifier,
 				fmt.Sprintf(
@@ -418,19 +427,39 @@ func (a *Analyzer) analyzeExpression(expr ast.Expression) {
 		}
 
 		if isStruct {
-			foundMember, ok := structType.GetMember(e.Identifier.Lexeme)
-			if !ok {
+			foundMember, isMember := structType.GetMember(e.Identifier.Lexeme)
+			foundMethod, isMethod := structType.MethodTable[e.Identifier.Lexeme]
+
+			if !isMember && !isMethod {
 				a.analysisError(
 					e.Identifier,
 					fmt.Sprintf(
-						"Type: '%s' does not have field: '%s'.",
+						"Type: '%s' does not have field or method: '%s'.",
 						structType.Name,
 						e.Identifier.Lexeme,
 					),
 				)
 			}
 
-			e.Typ = foundMember.Type
+			if isMember {
+				e.Typ = foundMember.Type
+			} else {
+				e.Typ = &foundMethod
+			}
+		} else if isPrimitive {
+			if foundMethod, ok := primType.MethodTable[e.Identifier.Lexeme]; ok {
+				e.Typ = &foundMethod
+			} else {
+				a.analysisError(
+					e.Identifier,
+					fmt.Sprintf(
+						"Primitive type: '%s' does not have a method: '%s'.",
+						primType.Name,
+						e.Identifier.Lexeme,
+					),
+				)
+			}
+
 		} else {
 			foundDeclType, ok := moduleType.Exports[e.Identifier.Lexeme]
 
@@ -521,7 +550,7 @@ func (a *Analyzer) analyzeExpression(expr ast.Expression) {
 			}
 		}
 
-		e.Typ = &ast.Primitive{Name: "bool"}
+		e.Typ, _ = a.typespace.Get("bool")
 	case *ast.CompositeLiteral:
 		e := expr.(*ast.CompositeLiteral)
 
@@ -656,15 +685,15 @@ func (a *Analyzer) analyzeExpression(expr ast.Expression) {
 		e := expr.(*ast.Literal)
 		switch e.Token.Type {
 		case token.STRING:
-			e.Typ = &ast.Primitive{Name: "str"}
+			e.Typ, _ = a.typespace.Get("str")
 		case token.INT:
-			e.Typ = &ast.Primitive{Name: "int"}
+			e.Typ, _ = a.typespace.Get("int")
 		case token.FLOAT:
-			e.Typ = &ast.Primitive{Name: "float"}
+			e.Typ, _ = a.typespace.Get("float")
 		case token.TRUE:
 			fallthrough
 		case token.FALSE:
-			e.Typ = &ast.Primitive{Name: "bool"}
+			e.Typ, _ = a.typespace.Get("bool")
 		}
 	}
 }
@@ -715,6 +744,54 @@ func (a *Analyzer) typeIsPrivate(t ast.Type) bool {
 
 func (a *Analyzer) analyzeStatement(statement ast.Statement) {
 	switch statement.(type) {
+	case *ast.ImplBlock:
+		s := statement.(*ast.ImplBlock)
+
+		if !isTopLevel {
+			a.analysisError(s.ImplToken, "Impl block must be top level.")
+		}
+
+		err := a.analyzeType(s.Receiver)
+		if err != nil {
+			a.analysisError(s.ImplToken, "Invalid type receiver in `impl` block.")
+		}
+
+		receiverIsNominal := false
+		_, isStruct := s.Receiver.(*ast.StructType)
+		_, isPrimitive := s.Receiver.(*ast.Primitive)
+
+		receiverIsNominal = isStruct || isPrimitive
+
+		if isPrimitive {
+			a.analysisError(s.ImplToken, "`impl` blocks have not yet been implemented for primitive types")
+		}
+
+		if !receiverIsNominal {
+			// TODO: Actually implement named type aliases
+			a.analysisError(s.ImplToken, "Impl block is only valid for nominal receiver.\n  helo: consider introducing a named type alias")
+		}
+
+		oldSelf, err := a.namespace.Get("self")
+		a.namespace.Shadow("self", &ast.PointerType{ElType: s.Receiver})
+		for _, method := range s.Methods {
+			if _, ok := (*s.Receiver.Methods())[method.Identifier.Lexeme]; ok {
+				a.analysisError(
+					method.Identifier,
+					fmt.Sprintf(
+						"'%s' already has a method called '%s'.",
+						s.Receiver.String(), method.Identifier.Lexeme,
+					),
+				)
+			}
+
+			a.analyzeStatement(&method)
+
+			(*s.Receiver.Methods())[method.Identifier.Lexeme] = method.ToType()
+		}
+
+		if err != nil {
+			a.namespace.Shadow("self", oldSelf)
+		}
 	case *ast.FunctionDeclaration:
 		s := statement.(*ast.FunctionDeclaration)
 
@@ -725,9 +802,7 @@ func (a *Analyzer) analyzeStatement(statement ast.Statement) {
 		oldFunctionScope := functionScope
 		functionScope = s
 
-		onlyTypeParams := []ast.Type{}
 		for _, p := range s.Parameters {
-			onlyTypeParams = append(onlyTypeParams, p.Type)
 			err := a.analyzeType(p.Type)
 			if err != nil {
 				a.analysisError(p.Identifier, "Invalid parameter type. "+err.Error())
@@ -748,12 +823,7 @@ func (a *Analyzer) analyzeStatement(statement ast.Statement) {
 			a.analysisError(s.Identifier, "Cannot return pointer type.\n  help: consider returning a box type instead")
 		}
 
-		signature := ast.FunctionType{
-			External:   s.External,
-			Name:       s.Identifier.Lexeme,
-			Parameters: onlyTypeParams,
-			ReturnType: s.ReturnType,
-		}
+		signature := s.ToType()
 
 		err = a.namespace.Declare(s.Identifier.Lexeme, &signature)
 		if err != nil {
@@ -814,6 +884,7 @@ func (a *Analyzer) analyzeStatement(statement ast.Statement) {
 			Name:         s.Identifier.Lexeme,
 			Members:      s.Members,
 			SourceModule: a.Module,
+			MethodTable:  make(map[string]ast.FunctionType),
 		}
 
 		err := a.typespace.Declare(s.Identifier.Lexeme, &st)

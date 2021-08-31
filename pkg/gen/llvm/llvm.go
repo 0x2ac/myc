@@ -355,6 +355,22 @@ func forwardDeclareModuleExports(importedModule *ast.Module) {
 
 func genStatement(stmt ast.Statement, currentModule *ast.Module) {
 	switch stmt.(type) {
+	case *ast.ImplBlock:
+		s := stmt.(*ast.ImplBlock)
+
+		for _, method := range s.Methods {
+			method.Parameters = append([]ast.Parameter{
+				{
+					Identifier: token.Token{
+						Lexeme: "self",
+						Type:   token.IDENTIFIER,
+					},
+					Type: &ast.PointerType{ElType: s.Receiver},
+				},
+			}, method.Parameters...)
+			method.Identifier.Lexeme = getTypeName(s.Receiver) + "." + method.Identifier.Lexeme
+			genStatement(&method, currentModule)
+		}
 	case *ast.StructDeclaration:
 		s := stmt.(*ast.StructDeclaration)
 
@@ -380,16 +396,7 @@ func genStatement(stmt ast.Statement, currentModule *ast.Module) {
 	case *ast.FunctionDeclaration:
 		s := stmt.(*ast.FunctionDeclaration)
 
-		var typeParams []ast.Type
-		for _, p := range s.Parameters {
-			typeParams = append(typeParams, p.Type)
-		}
-
-		funType := ast.FunctionType{
-			Name:       s.Identifier.Lexeme,
-			Parameters: typeParams,
-			ReturnType: s.ReturnType,
-		}
+		funType := s.ToType()
 
 		var fun *ir.Func
 		if s.External {
@@ -966,6 +973,9 @@ func genExpression(expr ast.Expression) value.Value {
 			callee = namespace[varExpr.Identifier.Lexeme]
 		} else if getExpr, ok := e.Callee.(*ast.GetExpression); ok {
 			callee = genExpression(getExpr)
+			if _, ok := getExpr.Expression.Type().(*ast.StructType); ok {
+				args = append([]value.Value{genExpression(getExpr.Expression).(*ir.InstLoad).Src}, args...)
+			}
 		} else {
 			panic("Can only generate variables as calle.")
 		}
@@ -992,28 +1002,43 @@ func genExpression(expr ast.Expression) value.Value {
 		e := expr.(*ast.GetExpression)
 
 		if st, ok := e.Expression.Type().(*ast.StructType); ok {
-			memberIndex := 0
-			for i, m := range st.Members {
-				if m.Identifier.Lexeme == e.Identifier.Lexeme {
-					memberIndex = i
+			if _, ok := st.MethodTable[e.Identifier.Lexeme]; ok {
+				var foundFunc *ir.Func
+				for _, fun := range module.Funcs {
+					if fun.Name() == getTypeName(st)+"."+e.Identifier.Lexeme {
+						foundFunc = fun
+					}
 				}
-			}
 
-			expr := genExpression(e.Expression)
-			var gep *ir.InstGetElementPtr
+				if foundFunc == nil {
+					panic("internal error: could not resolve method name")
+				}
 
-			if loadInst, ok := expr.(*ir.InstLoad); ok {
-				gep = block.NewGetElementPtr(
-					genType(st),
-					loadInst.Src,
-					constant.NewInt(types.I32, int64(0)),
-					constant.NewInt(types.I32, int64(memberIndex)),
-				)
+				return foundFunc
 			} else {
-				panic("internal error: get expression on non-load instruction.")
-			}
+				memberIndex := 0
+				for i, m := range st.Members {
+					if m.Identifier.Lexeme == e.Identifier.Lexeme {
+						memberIndex = i
+					}
+				}
 
-			return block.NewLoad(genType(st.Members[memberIndex].Type), gep)
+				expr := genExpression(e.Expression)
+				var gep *ir.InstGetElementPtr
+
+				if loadInst, ok := expr.(*ir.InstLoad); ok {
+					gep = block.NewGetElementPtr(
+						genType(st),
+						loadInst.Src,
+						constant.NewInt(types.I32, int64(0)),
+						constant.NewInt(types.I32, int64(memberIndex)),
+					)
+				} else {
+					panic("internal error: get expression on non-load instruction.")
+				}
+
+				return block.NewLoad(genType(st.Members[memberIndex].Type), gep)
+			}
 		} else if module, ok := e.Expression.Type().(*ast.Module); ok {
 			return namespace[module.Name+"."+e.Identifier.Lexeme]
 		}
@@ -1859,5 +1884,6 @@ func Gen(m *ast.Module) string {
 		genStatement(statement, m)
 	}
 
+	fmt.Println(module.String())
 	return module.String()
 }
