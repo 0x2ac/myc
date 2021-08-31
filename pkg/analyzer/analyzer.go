@@ -251,7 +251,7 @@ func (a *Analyzer) analyzeType(t ast.Type) error {
 		}
 	} else if primitive, ok := t.(*ast.Primitive); ok {
 		typ, _ := a.typespace.Get(primitive.Name)
-		primitive = typ.(*ast.Primitive)
+		*primitive = *typ.(*ast.Primitive)
 	}
 
 	return nil
@@ -762,10 +762,6 @@ func (a *Analyzer) analyzeStatement(statement ast.Statement) {
 
 		receiverIsNominal = isStruct || isPrimitive
 
-		if isPrimitive {
-			a.analysisError(s.ImplToken, "`impl` blocks have not yet been implemented for primitive types")
-		}
-
 		if !receiverIsNominal {
 			// TODO: Actually implement named type aliases
 			a.analysisError(s.ImplToken, "Impl block is only valid for nominal receiver.\n  helo: consider introducing a named type alias")
@@ -785,6 +781,7 @@ func (a *Analyzer) analyzeStatement(statement ast.Statement) {
 			}
 
 			a.analyzeStatement(&method)
+			delete(a.namespace.values, method.Identifier.Lexeme)
 
 			(*s.Receiver.Methods())[method.Identifier.Lexeme] = method.ToType()
 		}

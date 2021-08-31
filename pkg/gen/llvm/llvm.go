@@ -973,11 +973,15 @@ func genExpression(expr ast.Expression) value.Value {
 			callee = namespace[varExpr.Identifier.Lexeme]
 		} else if getExpr, ok := e.Callee.(*ast.GetExpression); ok {
 			callee = genExpression(getExpr)
-			if _, ok := getExpr.Expression.Type().(*ast.StructType); ok {
+
+			_, isStruct := getExpr.Expression.Type().(*ast.StructType)
+			_, isPrimitive := getExpr.Expression.Type().(*ast.Primitive)
+
+			if isStruct || isPrimitive {
 				args = append([]value.Value{genExpression(getExpr.Expression).(*ir.InstLoad).Src}, args...)
 			}
 		} else {
-			panic("Can only generate variables as calle.")
+			panic("Can only generate variables or get expressions as calle.")
 		}
 
 		if callee.(*ir.Func).Sig.RetType != types.Void {
@@ -1001,23 +1005,26 @@ func genExpression(expr ast.Expression) value.Value {
 	case *ast.GetExpression:
 		e := expr.(*ast.GetExpression)
 
-		if st, ok := e.Expression.Type().(*ast.StructType); ok {
-			if _, ok := st.MethodTable[e.Identifier.Lexeme]; ok {
+		structType, isStruct := e.Expression.Type().(*ast.StructType)
+		primType, isPrimitive := e.Expression.Type().(*ast.Primitive)
+
+		if isStruct {
+			if _, ok := structType.MethodTable[e.Identifier.Lexeme]; ok {
 				var foundFunc *ir.Func
 				for _, fun := range module.Funcs {
-					if fun.Name() == getTypeName(st)+"."+e.Identifier.Lexeme {
+					if fun.Name() == getTypeName(structType)+"."+e.Identifier.Lexeme {
 						foundFunc = fun
 					}
 				}
 
 				if foundFunc == nil {
-					panic("internal error: could not resolve method name")
+					panic("internal error: could not resolve method name on struct type")
 				}
 
 				return foundFunc
 			} else {
 				memberIndex := 0
-				for i, m := range st.Members {
+				for i, m := range structType.Members {
 					if m.Identifier.Lexeme == e.Identifier.Lexeme {
 						memberIndex = i
 					}
@@ -1028,7 +1035,7 @@ func genExpression(expr ast.Expression) value.Value {
 
 				if loadInst, ok := expr.(*ir.InstLoad); ok {
 					gep = block.NewGetElementPtr(
-						genType(st),
+						genType(structType),
 						loadInst.Src,
 						constant.NewInt(types.I32, int64(0)),
 						constant.NewInt(types.I32, int64(memberIndex)),
@@ -1037,8 +1044,21 @@ func genExpression(expr ast.Expression) value.Value {
 					panic("internal error: get expression on non-load instruction.")
 				}
 
-				return block.NewLoad(genType(st.Members[memberIndex].Type), gep)
+				return block.NewLoad(genType(structType.Members[memberIndex].Type), gep)
 			}
+		} else if isPrimitive {
+			var foundFunc *ir.Func
+			for _, fun := range module.Funcs {
+				if fun.Name() == getTypeName(primType)+"."+e.Identifier.Lexeme {
+					foundFunc = fun
+				}
+			}
+
+			if foundFunc == nil {
+				panic("internal error: could not resolve method name on primitive")
+			}
+
+			return foundFunc
 		} else if module, ok := e.Expression.Type().(*ast.Module); ok {
 			return namespace[module.Name+"."+e.Identifier.Lexeme]
 		}

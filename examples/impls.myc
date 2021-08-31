@@ -19,6 +19,16 @@ impl str {
     }
 }
 
+impl int {
+    fun timesTwo() int {
+        return self^ * 2
+    }
+
+    fun prnt() {
+        print self^
+    }
+}
+
 fun main() {
     var p1 = Person{"John", 15}
     var p2 = Person{"Jane", 26}
@@ -37,4 +47,5 @@ fun main() {
     }
 
     "woah".prnt()
+    24.timesTwo().prnt()
 }
