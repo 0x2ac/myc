@@ -9,7 +9,7 @@ import (
 func genType(t ast.Type) string {
 	switch t.(type) {
 	case *ast.Primitive:
-		return t.(*ast.Primitive).Name
+		return t.(*ast.Primitive).String()
 	case *ast.StructType:
 		return t.(*ast.StructType).Name
 	case *ast.PointerType:
@@ -37,8 +37,6 @@ func genStatement(stmt ast.Statement) string {
 		return genIfStatement(stmt.(*ast.IfStatement))
 	case *ast.WhileStatement:
 		return genWhileStatement(stmt.(*ast.WhileStatement))
-	case *ast.PrintStatement:
-		return genPrintStatement(stmt.(*ast.PrintStatement))
 	case *ast.ReturnStatement:
 		return genReturnStatement(stmt.(*ast.ReturnStatement))
 	case *ast.ExpressionStatement:
@@ -141,13 +139,35 @@ func genWhileStatement(s *ast.WhileStatement) string {
 
 func getFormatStringForType(t ast.Type) string {
 	if primitive, ok := t.(*ast.Primitive); ok {
-		switch primitive.Name {
-		case "int":
+		switch primitive.Kind {
+		case ast.I8:
+			fallthrough
+		case ast.I16:
+			fallthrough
+		case ast.I32:
+			fallthrough
+		case ast.I64:
 			return "%d"
-		case "float":
-			return "%f"
-		case "bool":
+
+		case ast.U8:
+			fallthrough
+		case ast.U16:
+			fallthrough
+		case ast.U32:
+			fallthrough
+		case ast.U64:
+			return "%ld"
+
+		case ast.F32:
+			fallthrough
+		case ast.F64:
+			return "%.15g"
+
+		case ast.Str:
 			return "%s"
+		case ast.Bool:
+			return "%d"
+
 		}
 	} else if _, ok := t.(*ast.StructType); ok {
 		return "%p"
@@ -156,32 +176,6 @@ func getFormatStringForType(t ast.Type) string {
 	}
 
 	panic("Invalid type passed to `getFormatStringForType`.")
-}
-
-func genPrintStatement(printStmt *ast.PrintStatement) string {
-	formatString := ""
-	arguments := ""
-	for i, expr := range printStmt.Expressions {
-		formatString += getFormatStringForType(expr.Type())
-
-		if _, ok := expr.Type().(*ast.StructType); ok {
-			// For now structs only get their reference printed
-			arguments += "&" + genExpression(expr)
-		} else if _, ok := expr.Type().(*ast.SliceType); ok {
-			arguments += "&" + genExpression(expr)
-		} else if p, ok := expr.Type().(*ast.Primitive); ok && p.Name == "bool" {
-			arguments += fmt.Sprintf("boolToString(%s)", genExpression(expr))
-		} else {
-			arguments += genExpression(expr)
-		}
-
-		if i != len(printStmt.Expressions)-1 {
-			formatString += " "
-			arguments += ", "
-		}
-	}
-
-	return fmt.Sprintf("printf(\"%s\", %s);", formatString, arguments)
 }
 
 func genReturnStatement(returnStmt *ast.ReturnStatement) string {

@@ -11,7 +11,6 @@ const (
 
 	KEYWORD_BEGIN
 	VAR
-	PRINT
 	FUN
 	RETURN
 	STRUCT
@@ -88,7 +87,6 @@ type Pos struct {
 
 var Keywords = [...]string{
 	"var",
-	"print",
 	"fun",
 	"return",
 	"struct",

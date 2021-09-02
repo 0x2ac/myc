@@ -14,27 +14,6 @@ type Parser struct {
 	Module *ast.Module
 }
 
-var primitives = [...]string{
-	"int",
-	"float",
-	"bool",
-	"str",
-}
-
-func isIdentifierPrimitive(ident token.Token) bool {
-	if ident.Type != token.IDENTIFIER {
-		panic("Invalid token passed to `isIdentifierPrimitive`.")
-	}
-
-	for _, p := range primitives {
-		if ident.Lexeme == p {
-			return true
-		}
-	}
-
-	return false
-}
-
 func (p *Parser) parseError(token token.Token, message string) {
 	log.Fatalf(
 		"%s\nparse-error: %d:%d: %s",
@@ -265,21 +244,6 @@ func (p *Parser) parseStatement() ast.Statement {
 		return &ast.ReturnStatement{
 			Expression:  expr,
 			ReturnToken: t,
-		}
-	} else if t.Type == token.PRINT {
-		// PrintStatement
-		p.current++
-		exprs := []ast.Expression{}
-		first := p.parseExpression(false)
-		exprs = append(exprs, first)
-		for p.peek(0).Type == token.COMMA {
-			p.current++
-			exprs = append(exprs, p.parseExpression(false))
-		}
-		p.expect(token.SEMICOLON, "Expect semicolon after print statement.")
-		return &ast.PrintStatement{
-			Expressions: exprs,
-			PrintToken:  t,
 		}
 	} else if t.Type == token.IMPORT {
 		// ImportStatement
@@ -674,9 +638,9 @@ func (p *Parser) parseType() ast.Type {
 		ident := p.peek(0)
 		p.current++
 
-		if isIdentifierPrimitive(p.peek(-1)) {
+		if ast.IsPrimitive(ident.Lexeme) {
 			typ = &ast.Primitive{
-				Name:        ident.Lexeme,
+				Kind:        ast.PrimitiveKindFromString(ident.Lexeme),
 				MethodTable: make(map[string]ast.FunctionType),
 			}
 		} else {

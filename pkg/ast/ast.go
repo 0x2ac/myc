@@ -15,8 +15,83 @@ type Type interface {
 	Methods() *map[string]FunctionType
 }
 
+type PrimitiveKind int
+
+const (
+	I8 PrimitiveKind = iota
+	I16
+	I32
+	I64
+
+	U8
+	U16
+	U32
+	U64
+
+	F32
+	F64
+
+	Str
+	Bool
+)
+
+var PrimitiveKindStrings = [...]string{
+	I8:  "i8",
+	I16: "i16",
+	I32: "i32",
+	I64: "i64",
+
+	U8:  "u8",
+	U16: "u16",
+	U32: "u32",
+	U64: "u64",
+
+	F32: "f32",
+	F64: "f64",
+
+	Str:  "str",
+	Bool: "bool",
+}
+
+func IsPrimitive(name string) bool {
+	for _, kindName := range PrimitiveKindStrings {
+		if name == kindName {
+			return true
+		}
+	}
+
+	return false
+}
+
+// Panics if provided string is not a valid primitive kind
+func PrimitiveKindFromString(name string) PrimitiveKind {
+	for kind, kindName := range PrimitiveKindStrings {
+		if name == kindName {
+			return PrimitiveKind(kind)
+		}
+	}
+
+	panic("Invalid primitive name passed to `PrimitiveKindFromString`")
+}
+
+func (p PrimitiveKind) String() string {
+	return PrimitiveKindStrings[p]
+}
+
+func (p PrimitiveKind) IsSignedInteger() bool {
+	return p >= I8 && p <= I64
+}
+
+func (p PrimitiveKind) IsUnsignedInteger() bool {
+	return p >= U8 && p <= U64
+}
+
+func (p PrimitiveKind) IsFloatingPoint() bool {
+	return p >= F32 && p <= F64
+}
+
 type Primitive struct {
-	Name        string
+	Kind        PrimitiveKind
 	MethodTable map[string]FunctionType
 }
 
@@ -43,7 +118,8 @@ type BoxType struct {
 }
 
 type SliceType struct {
-	ElType Type
+	ElType      Type
+	MethodTable map[string]FunctionType
 }
 
 type SumType struct {
@@ -75,18 +151,18 @@ func (*Module) isType()       {}
 
 func (p *Primitive) Equals(t Type) bool {
 	if primType, ok := t.(*Primitive); ok {
-		return p.Name == primType.Name
+		return p.Kind == primType.Kind
 	}
 
 	return false
 }
 
 func (p *Primitive) String() string {
-	return p.Name
+	return p.Kind.String()
 }
 
 func (p *Primitive) IsCopyable() bool {
-	return p.Name != "str"
+	return p.Kind != Str
 }
 
 func (p *Primitive) Methods() *map[string]FunctionType {
@@ -94,7 +170,7 @@ func (p *Primitive) Methods() *map[string]FunctionType {
 }
 
 func (p *Primitive) IsNumeric() bool {
-	return p.Name == "int" || p.Name == "float"
+	return p.Kind < Str
 }
 
 func (f *FunctionType) Equals(t Type) bool {
@@ -240,7 +316,7 @@ func (s *SliceType) IsCopyable() bool {
 }
 
 func (s *SliceType) Methods() *map[string]FunctionType {
-	panic("SliceType cannot have methods")
+	return &s.MethodTable
 }
 
 func (s *SumType) Equals(t Type) bool {
@@ -431,12 +507,6 @@ type WhileStatement struct {
 	WhileToken token.Token
 }
 
-type PrintStatement struct {
-	Expressions []Expression
-
-	PrintToken token.Token
-}
-
 type ReturnStatement struct {
 	Expression Expression
 
@@ -462,7 +532,6 @@ func (*ImplBlock) isStatement()           {}
 func (*VariableDeclaration) isStatement() {}
 func (*IfStatement) isStatement()         {}
 func (*WhileStatement) isStatement()      {}
-func (*PrintStatement) isStatement()      {}
 func (*ReturnStatement) isStatement()     {}
 func (*ExpressionStatement) isStatement() {}
 func (*ImportStatement) isStatement()     {}

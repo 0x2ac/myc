@@ -62,6 +62,21 @@ type Analyzer struct {
 	typespace *SymbolTable
 }
 
+func getSliceTypeMethods(elType ast.Type) map[string]ast.FunctionType {
+	return map[string]ast.FunctionType{
+		"len": {
+			Name:       "len",
+			Parameters: []ast.Type{},
+			ReturnType: &ast.Primitive{Kind: ast.U64},
+		},
+		"buf": {
+			Name:       "buf",
+			Parameters: []ast.Type{},
+			ReturnType: &ast.PointerType{ElType: elType},
+		},
+	}
+}
+
 // Modifies the `statements` argument to add and check type information.
 // Panics with a useful error message if program has semantic errors.
 //
@@ -75,10 +90,31 @@ func Analyze(m *ast.Module) {
 		typespace: NewSymbolTable(),
 	}
 
-	a.typespace.Declare("str", &ast.Primitive{Name: "str", MethodTable: make(map[string]ast.FunctionType)})
-	a.typespace.Declare("int", &ast.Primitive{Name: "int", MethodTable: make(map[string]ast.FunctionType)})
-	a.typespace.Declare("float", &ast.Primitive{Name: "float", MethodTable: make(map[string]ast.FunctionType)})
-	a.typespace.Declare("bool", &ast.Primitive{Name: "bool", MethodTable: make(map[string]ast.FunctionType)})
+	a.typespace.Declare("i8", &ast.Primitive{Kind: ast.I8, MethodTable: make(map[string]ast.FunctionType)})
+	a.typespace.Declare("i16", &ast.Primitive{Kind: ast.I16, MethodTable: make(map[string]ast.FunctionType)})
+	a.typespace.Declare("i32", &ast.Primitive{Kind: ast.I32, MethodTable: make(map[string]ast.FunctionType)})
+	a.typespace.Declare("i64", &ast.Primitive{Kind: ast.I64, MethodTable: make(map[string]ast.FunctionType)})
+
+	a.typespace.Declare("u8", &ast.Primitive{Kind: ast.U8, MethodTable: make(map[string]ast.FunctionType)})
+	a.typespace.Declare("u16", &ast.Primitive{Kind: ast.U16, MethodTable: make(map[string]ast.FunctionType)})
+	a.typespace.Declare("u32", &ast.Primitive{Kind: ast.U32, MethodTable: make(map[string]ast.FunctionType)})
+	a.typespace.Declare("u64", &ast.Primitive{Kind: ast.U64, MethodTable: make(map[string]ast.FunctionType)})
+
+	a.typespace.Declare("f32", &ast.Primitive{Kind: ast.F32, MethodTable: make(map[string]ast.FunctionType)})
+	a.typespace.Declare("f64", &ast.Primitive{Kind: ast.F64, MethodTable: make(map[string]ast.FunctionType)})
+
+	a.typespace.Declare("str", &ast.Primitive{Kind: ast.Str, MethodTable: map[string]ast.FunctionType{
+		"bytes": {
+			Name:       "bytes",
+			Parameters: []ast.Type{},
+			ReturnType: &ast.SliceType{
+				ElType:      &ast.Primitive{Kind: ast.U8},
+				MethodTable: getSliceTypeMethods(&ast.Primitive{Kind: ast.U8}),
+			},
+		},
+	}})
+
+	a.typespace.Declare("bool", &ast.Primitive{Kind: ast.Bool, MethodTable: make(map[string]ast.FunctionType)})
 
 	for _, statement := range m.Statements {
 		a.analyzeStatement(statement)
@@ -220,6 +256,8 @@ func (a *Analyzer) analyzeType(t ast.Type) error {
 		return a.analyzeType(boxType.ElType)
 	} else if ptrType, ok := t.(*ast.PointerType); ok {
 		return a.analyzeType(ptrType.ElType)
+	} else if sliceType, ok := t.(*ast.SliceType); ok {
+		sliceType.MethodTable = getSliceTypeMethods(sliceType.ElType)
 	} else if structType, ok := t.(*ast.StructType); ok {
 		if structType.SourceModule != nil {
 			resolvedModuleType, err := a.namespace.Get(structType.SourceModule.Name)
@@ -250,7 +288,7 @@ func (a *Analyzer) analyzeType(t ast.Type) error {
 			*structType = *resolved.(*ast.StructType)
 		}
 	} else if primitive, ok := t.(*ast.Primitive); ok {
-		typ, _ := a.typespace.Get(primitive.Name)
+		typ, _ := a.typespace.Get(primitive.String())
 		*primitive = *typ.(*ast.Primitive)
 	}
 
@@ -268,8 +306,8 @@ func (a *Analyzer) analyzeExpression(expr ast.Expression) {
 		}
 
 		prim := e.Value.Type().(*ast.Primitive)
-		if prim.Name != "int" && prim.Name != "float" {
-			a.analysisError(e.Operator, "Unary operator can only be on `int` or `float` types.")
+		if !prim.IsNumeric() {
+			a.analysisError(e.Operator, "Unary operator can only be on numeric types.")
 		}
 
 		e.Typ = prim
@@ -307,7 +345,7 @@ func (a *Analyzer) analyzeExpression(expr ast.Expression) {
 			}
 
 			if e.Operator.Type == token.PLUS {
-				if !prim.IsNumeric() && prim.Name != "str" {
+				if !prim.IsNumeric() && prim.Kind != ast.Str {
 					a.analysisError(e.Operator, fmt.Sprintf(
 						"Operator: '%s' can only be used on numeric primitives (e.g. `int`, `float`) and `str`s.",
 						e.Operator.Lexeme,
@@ -345,7 +383,7 @@ func (a *Analyzer) analyzeExpression(expr ast.Expression) {
 				e.Typ, _ = a.typespace.Get("bool")
 			} else if e.Operator.Type == token.AND_AND || e.Operator.Type == token.OR_OR {
 				// Logical operators only work on `bool` expressions
-				if prim.Name != "bool" {
+				if prim.Kind != ast.Bool {
 					a.analysisError(e.Operator, fmt.Sprintf(
 						"Operator: '%s' can only be used on values of type `bool`.",
 						e.Operator.Lexeme,
@@ -412,11 +450,11 @@ func (a *Analyzer) analyzeExpression(expr ast.Expression) {
 		a.analyzeExpression(e.Expression)
 
 		primType, isPrimitive := e.Expression.Type().(*ast.Primitive)
+		sliceType, isSlice := e.Expression.Type().(*ast.SliceType)
 		structType, isStruct := e.Expression.Type().(*ast.StructType)
 		moduleType, isModule := e.Expression.Type().(*ast.Module)
 
-		// e.g. 32.value, "hello".foo, etc.
-		if !isStruct && !isModule && !isPrimitive {
+		if !isStruct && !isModule && !isPrimitive && !isSlice {
 			a.analysisError(
 				e.Identifier,
 				fmt.Sprintf(
@@ -446,20 +484,26 @@ func (a *Analyzer) analyzeExpression(expr ast.Expression) {
 			} else {
 				e.Typ = &foundMethod
 			}
-		} else if isPrimitive {
-			if foundMethod, ok := primType.MethodTable[e.Identifier.Lexeme]; ok {
+		} else if isSlice || isPrimitive {
+			var methodTable map[string]ast.FunctionType
+			if isSlice {
+				methodTable = sliceType.MethodTable
+			} else {
+				methodTable = primType.MethodTable
+			}
+
+			if foundMethod, ok := methodTable[e.Identifier.Lexeme]; ok {
 				e.Typ = &foundMethod
 			} else {
 				a.analysisError(
 					e.Identifier,
 					fmt.Sprintf(
-						"Primitive type: '%s' does not have a method: '%s'.",
-						primType.Name,
+						"Built-in type: '%s' does not have a method: '%s'.",
+						primType.String(),
 						e.Identifier.Lexeme,
 					),
 				)
 			}
-
 		} else {
 			foundDeclType, ok := moduleType.Exports[e.Identifier.Lexeme]
 
@@ -488,7 +532,7 @@ func (a *Analyzer) analyzeExpression(expr ast.Expression) {
 					e.Expression.Type().String(),
 				),
 			)
-		} else if !indexIsPrimitive || prim.Name != "int" {
+		} else if !indexIsPrimitive || !(prim.Kind.IsSignedInteger() || prim.Kind.IsUnsignedInteger()) {
 			a.analysisError(
 				e.LeftBracketToken,
 				fmt.Sprintf(
@@ -505,9 +549,7 @@ func (a *Analyzer) analyzeExpression(expr ast.Expression) {
 		a.analyzeExpression(e.Expression)
 		a.analyzeType(e.TargetType)
 
-		if sumType, ok := e.Expression.Type().(*ast.SumType); !ok {
-			a.analysisError(e.AsToken, "Can only type cast sum-type expressions.")
-		} else {
+		if sumType, ok := e.Expression.Type().(*ast.SumType); ok {
 			foundOption := false
 			for _, o := range sumType.Options {
 				if o.Equals(e.TargetType) {
@@ -522,6 +564,20 @@ func (a *Analyzer) analyzeExpression(expr ast.Expression) {
 					sumType.String(), e.TargetType.String(),
 				))
 			}
+		} else if targetPrimType, ok := e.TargetType.(*ast.Primitive); ok {
+			if exprPrimType, ok := e.Expression.Type().(*ast.Primitive); ok {
+				if !targetPrimType.IsNumeric() {
+					a.analysisError(e.AsToken, "Cannot cast numeric expression to non-numeric type.")
+				} else if !exprPrimType.IsNumeric() {
+					a.analysisError(e.AsToken, "Cannot cast non-numeric expression.")
+				} else if exprPrimType.Equals(targetPrimType) {
+					a.analysisError(e.AsToken, "Unrequired cast, expression already is of target type.")
+				}
+			} else {
+				a.analysisError(e.AsToken, "Cannot cast expression of non-primitive type to primitive type")
+			}
+		} else {
+			a.analysisError(e.AsToken, "Can only type cast sum-type or primitive-type expressions.")
 		}
 
 		e.Typ = e.TargetType
@@ -652,7 +708,7 @@ func (a *Analyzer) analyzeExpression(expr ast.Expression) {
 			}
 		}
 
-		e.Typ = &ast.SliceType{ElType: elType}
+		e.Typ = &ast.SliceType{ElType: elType, MethodTable: getSliceTypeMethods(elType)}
 	case *ast.ReferenceOf:
 		e := expr.(*ast.ReferenceOf)
 		a.analyzeExpression(e.Target)
@@ -687,9 +743,9 @@ func (a *Analyzer) analyzeExpression(expr ast.Expression) {
 		case token.STRING:
 			e.Typ, _ = a.typespace.Get("str")
 		case token.INT:
-			e.Typ, _ = a.typespace.Get("int")
+			e.Typ, _ = a.typespace.Get("i32")
 		case token.FLOAT:
-			e.Typ, _ = a.typespace.Get("float")
+			e.Typ, _ = a.typespace.Get("f64")
 		case token.TRUE:
 			fallthrough
 		case token.FALSE:
@@ -945,7 +1001,7 @@ func (a *Analyzer) analyzeStatement(statement ast.Statement) {
 		}
 
 		a.analyzeExpression(s.Condition)
-		if p, ok := s.Condition.Type().(*ast.Primitive); !ok || p.Name != "bool" {
+		if p, ok := s.Condition.Type().(*ast.Primitive); !ok || p.Kind != ast.Bool {
 			a.analysisError(
 				s.IfToken,
 				fmt.Sprintf(
@@ -959,7 +1015,7 @@ func (a *Analyzer) analyzeStatement(statement ast.Statement) {
 		if len(s.ElseIfStatements) != 0 {
 			for _, e := range s.ElseIfStatements {
 				a.analyzeExpression(e.Condition)
-				if p, ok := e.Condition.Type().(*ast.Primitive); !ok || p.Name != "bool" {
+				if p, ok := e.Condition.Type().(*ast.Primitive); !ok || p.Kind != ast.Bool {
 					a.analysisError(
 						e.IfToken,
 						fmt.Sprintf(
@@ -983,7 +1039,7 @@ func (a *Analyzer) analyzeStatement(statement ast.Statement) {
 		}
 
 		a.analyzeExpression(s.Condition)
-		if p, ok := s.Condition.Type().(*ast.Primitive); !ok || p.Name != "bool" {
+		if p, ok := s.Condition.Type().(*ast.Primitive); !ok || p.Kind != ast.Bool {
 			a.analysisError(
 				s.WhileToken,
 				fmt.Sprintf(
@@ -993,19 +1049,6 @@ func (a *Analyzer) analyzeStatement(statement ast.Statement) {
 			)
 		}
 		a.analyzeStatement(&s.Block)
-	case *ast.PrintStatement:
-		s := statement.(*ast.PrintStatement)
-
-		if isTopLevel {
-			a.analysisError(s.PrintToken, "Print statement cannot be top level.")
-		}
-
-		for _, expr := range s.Expressions {
-			a.analyzeExpression(expr)
-			if expr.Type() == nil {
-				a.analysisError(expr.ErrorToken(), "Cannot print void expression")
-			}
-		}
 	case *ast.ReturnStatement:
 		s := statement.(*ast.ReturnStatement)
 
